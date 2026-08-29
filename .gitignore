@@ -1,0 +1,147 @@
+# ==============================
+# Smush — Python / FastAPI / Flet
+# ==============================
+
+# --- Python bytecode / cache ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyc
+*.pyo
+*.pyd
+
+# --- Dist / build / packaging ---
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.whl
+*.tar.gz
+
+# --- Entornos virtuales (uv, venv, poetry) ---
+.venv/
+venv/
+ENV/
+env/
+.env/
+.conda/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- uv ---
+.uv/
+uv.lock.bak
+
+# --- Testing / coverage ---
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.pytest_cache/
+nosetests.xml
+pytest.xml
+
+# --- Type checkers / linters ---
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+.flake8_cache/
+
+# --- IDEs ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.spyderproject
+.spyproject
+.ropeproject
+
+# --- OS ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# --- Variables de entorno / secretos ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.toml
+
+# --- Logs ---
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Jupyter ---
+.ipynb_checkpoints
+*.ipynb
+
+# --- Flet / Flutter (build desktop, web, móvil) ---
+# Flet genera build/ al empaquetar para desktop/móvil
+.flet/
+storage/
+flutter/
+build/flutter_assets/
+*.apk
+*.aab
+*.ipa
+*.app
+
+# --- Smush específico ---
+# Fuentes descargadas con scripts/fetch_fonts.py (se regeneran con uv run python scripts/fetch_fonts.py)
+# Descomenta la siguiente línea si NO querés versionar las TTF (requiere fetch en cada clon):
+# assets/fonts/*.ttf
+# assets/fonts/
+.atl
+
+# Jobs temporales del compresor (en producción viven en tempfile.gettempdir()/image-compressor-jobs)
+# Si alguna vez se configuran dentro del repo:
+image-compressor-jobs/
+tmp/
+temp/
+
+# Archivos generados al probar compresión local
+*.zip
+!tests/**/*.zip
+output/
+out/
+
+# --- Docker ---
+.dockerignore.bak
