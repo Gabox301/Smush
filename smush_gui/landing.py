@@ -155,11 +155,25 @@ def build_landing(app) -> ft.Control:  # noqa: ANN001
         height=340,
     )
 
-    hero_section = ft.Row(
-        wrap=True,
-        spacing=40,
-        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        controls=[hero_copy, hero_visual],
+    # Layout responsive: a la derecha en desktop (lg), debajo en mobile (sm)
+    hero_section = ft.Container(
+        width=1100,
+        content=ft.ResponsiveRow(
+            spacing=40,
+            run_spacing=40,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            controls=[
+                ft.Container(
+                    col={"sm": 12, "lg": 7},
+                    content=hero_copy,
+                ),
+                ft.Container(
+                    col={"sm": 12, "lg": 5},
+                    alignment=ft.Alignment.CENTER,
+                    content=hero_visual,
+                ),
+            ],
+        ),
     )
 
     trust = ft.Container(

@@ -19,7 +19,6 @@ from .theme import (
     INK_SOFT,
     LIME,
     LIME_DARK,
-    RADIUS,
     SURFACE,
     SURFACE_ALT,
     mono_text,
@@ -98,26 +97,29 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
         ),
     )
 
-    # ---- Dropzone ----
-    app.dropzone_icon = ft.Icon(ft.Icons.UPLOAD, size=34, color=INK_SOFT)
+    # ---- Dropzone — panel = área arrastrable (cuadro centrado) ----
+    app.dropzone_icon = ft.Icon(ft.Icons.UPLOAD, size=38, color=INK_SOFT)
     app.dropzone_sub = mono_text("o hacé clic para elegirlas — AVIF, WEBP, JPEG, PNG", size=13)
-    dropzone = ft.Container(
-        border=ft.Border.all(BW, INK_SOFT),
-        border_radius=RADIUS,
-        padding=ft.Padding(20, 46, 20, 46),
-        alignment=ft.Alignment.CENTER,
-        on_click=app.pick_files,
-        content=ft.Column(
-            spacing=4,
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            controls=[
-                app.dropzone_icon,
-                ft.Text("Arrastrá imágenes acá", size=20, weight=ft.FontWeight.W_700,
-                        color=INK, font_family=FONT_DISPLAY or None),
-                app.dropzone_sub,
-            ],
-        ),
+    dropzone_content = ft.Column(
+        spacing=8,
+        alignment=ft.MainAxisAlignment.CENTER,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        controls=[
+            app.dropzone_icon,
+            ft.Text("Arrastrá imágenes acá", size=20, weight=ft.FontWeight.W_700,
+                    color=INK, font_family=FONT_DISPLAY or None, text_align=ft.TextAlign.CENTER),
+            ft.Container(height=4),
+            app.dropzone_sub,
+        ],
     )
+    # El neo_panel ES el cuadro: 360×360, centrado, sin contenedor exterior ancho
+    dropzone = neo_panel(dropzone_content)
+    dropzone.width = 360
+    dropzone.height = 360
+    dropzone.alignment = ft.Alignment.CENTER
+    dropzone.on_click = app.pick_files
+    # Borde inicial suave, hover lo oscurece
+    dropzone.border = ft.Border.all(BW, INK_SOFT)
 
     def handle_hover(e: ft.Event) -> None:
         hovered = bool(e.data)
@@ -128,7 +130,11 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
         dropzone.update()
 
     dropzone.on_hover = handle_hover
-    dropzone_panel = neo_panel(dropzone)
+    # Row centrado para que el panel cuadrado no estire a todo el ancho del ListView
+    dropzone_panel = ft.Row(
+        alignment=ft.MainAxisAlignment.CENTER,
+        controls=[dropzone],
+    )
 
     # ---- Lista de pendientes / resultados ----
     app.file_list_col = ft.Column(spacing=12)
