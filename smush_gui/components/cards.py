@@ -21,27 +21,27 @@ from .primitives import with_hover
 
 
 def feature_card(i: int, icon: ft.IconData, title: str, text: str) -> ft.Container:
-    icon_bgs = [LIME, CORAL, BLUE, SURFACE_ALT]
-    icon_colors = [INK, "#ffffff", "#ffffff", INK_SOFT]
+    icon_bgs: list[str] = [LIME, CORAL, BLUE, SURFACE_ALT]
+    icon_colors: list[str] = [INK, "#ffffff", "#ffffff", INK_SOFT]
     return with_hover(
-        neo_panel(
-            ft.Column(
+        card=neo_panel(
+            content=ft.Column(
                 spacing=0,
                 controls=[
                     ft.Container(
                         width=46,
                         height=46,
                         bgcolor=icon_bgs[i % 4],
-                        border=ft.Border.all(2, INK),
+                        border=ft.Border.all(width=2, color=INK),
                         border_radius=10,
                         alignment=ft.Alignment.CENTER,
                         content=ft.Icon(icon, size=22, color=icon_colors[i % 4]),
                     ),
                     ft.Container(height=14),
-                    ft.Text(title, size=17, weight=ft.FontWeight.W_700, color=INK,
+                    ft.Text(value=title, size=17, weight=ft.FontWeight.W_700, color=INK,
                             font_family=FONT_DISPLAY or None),
                     ft.Container(height=6),
-                    ft.Text(text, size=13.5, color=INK_SOFT),
+                    ft.Text(value=text, size=13.5, color=INK_SOFT),
                 ],
             ),
             padding=22,
@@ -51,8 +51,8 @@ def feature_card(i: int, icon: ft.IconData, title: str, text: str) -> ft.Contain
 
 def step_card(num: int, title: str, text: str) -> ft.Container:
     return with_hover(
-        neo_panel(
-            ft.Column(
+        card=neo_panel(
+            content=ft.Column(
                 spacing=0,
                 controls=[
                     ft.Container(
@@ -61,14 +61,14 @@ def step_card(num: int, title: str, text: str) -> ft.Container:
                         bgcolor=INK,
                         border_radius=999,
                         alignment=ft.Alignment.CENTER,
-                        content=ft.Text(str(num), size=24, weight=ft.FontWeight.W_900,
+                        content=ft.Text(value=str(object=num), size=24, weight=ft.FontWeight.W_900,
                                         color=SURFACE, font_family=FONT_DISPLAY or None),
                     ),
                     ft.Container(height=14),
-                    ft.Text(title, size=17, weight=ft.FontWeight.W_700, color=INK,
+                    ft.Text(value=title, size=17, weight=ft.FontWeight.W_700, color=INK,
                             font_family=FONT_DISPLAY or None),
                     ft.Container(height=6),
-                    ft.Text(text, size=13.5, color=INK_SOFT),
+                    ft.Text(value=text, size=13.5, color=INK_SOFT),
                 ],
             ),
             padding=24,

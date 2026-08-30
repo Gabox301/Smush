@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from typing import Any, Callable
 import uuid
 import zipfile
 from pathlib import Path
@@ -50,7 +51,7 @@ class SmushApp:
     landing_col: ft.ListView
     hero_shape: ft.Image
 
-    def __init__(self, page: ft.Page):
+    def __init__(self, page: ft.Page) -> None:
         self.page = page
         self.pending = []
         self.results = []
@@ -68,9 +69,9 @@ class SmushApp:
         page.window.width = 1280
         page.window.height = 800
         # Ícono de ventana (barra de título y barra de tareas).
-        icon_ico = ASSETS / "img" / "favicon.ico"
+        icon_ico: Path = ASSETS / "img" / "favicon.ico"
         if icon_ico.exists():
-            page.window.icon = str(icon_ico)
+            page.window.icon = str(object=icon_ico)
 
         self._build()
 
@@ -81,18 +82,18 @@ class SmushApp:
             image=ft.DecorationImage(src="dots-tile.png", repeat=ft.ImageRepeat.REPEAT),
         )
 
-        blob_lime = _blob(size=360, right=-120, top=-120, colors=["#8cc6ff5e", "#00c6ff5e"])
-        blob_coral = _blob(size=300, left=-100, bottom=-100, colors=["#59ff5d45", "#00ff5d45"])
-        blob_blue = _blob(size=300, right=-120, bottom=260, colors=["#384f6dff", "#004f6dff"])
+        blob_lime: ft.Container = _blob(size=360, right=-120, top=-120, colors=["#8cc6ff5e", "#00c6ff5e"])
+        blob_coral: ft.Container = _blob(size=300, left=-100, bottom=-100, colors=["#59ff5d45", "#00ff5d45"])
+        blob_blue: ft.Container = _blob(size=300, right=-120, bottom=260, colors=["#384f6dff", "#004f6dff"])
 
         # Vista de la herramienta (oculta al inicio) y landing (visible).
-        self.tool_view = build_tool(self)  # noqa: (asigna panels/atributos)
+        self.tool_view = build_tool(app=self)  # noqa: (asigna panels/atributos)
         self.tool_view.visible = False
-        self.landing_view = build_landing(self)
+        self.landing_view = build_landing(app=self)
         self.landing_view.visible = True
 
         stack = ft.Stack(
-            [
+            controls=[
                 background_dots,
                 blob_lime,
                 blob_coral,
@@ -111,7 +112,7 @@ class SmushApp:
         self.results_panel.visible = False
         # Altura acotada para ListView/Column dentro de Stack: sin esto el scroll se recorta.
         try:
-            _h = self.page.height or self.page.window.height or 700
+            _h: int | float = self.page.height or self.page.window.height or 700
             if _h and _h > 100:
                 self.landing_col.height = _h
                 self.main_column.height = _h
@@ -120,7 +121,7 @@ class SmushApp:
 
         def _on_resize(e: ft.WindowResizeEvent) -> None:  # type: ignore
             try:
-                h = getattr(e, "height", None) or self.page.window.height or self.page.height
+                h: Any | int | float | None = getattr(e, "height", None) or self.page.window.height or self.page.height
                 if h and h > 100:
                     self.landing_col.height = h
                     self.main_column.height = h
@@ -130,7 +131,7 @@ class SmushApp:
 
         self.page.on_resized = _on_resize  # type: ignore[assignment]
         self.page.update()
-        self.page.run_task(self._squish_loop)
+        self.page.run_task(handler=self._squish_loop)
 
     # ---------------- Navegación ----------------
     def go_tool(self, _e=None) -> None:
@@ -141,12 +142,12 @@ class SmushApp:
     def go_landing(self, _e=None) -> None:
         self.tool_view.visible = False
         self.landing_view.visible = True
-        self.page.run_task(self._reset_landing_scroll)
+        self.page.run_task(handler=self._reset_landing_scroll)
 
     async def scroll_landing(self, key: str) -> None:
         # ScrollKey no era fiable dentro de ListView+Row (a veces no scrolleaba).
         # Usamos offsets calculados: hero ~0, features ~900, how ~1500.
-        offsets = {"top": 0, "features": 850, "how": 1450}
+        offsets: dict[str, int] = {"top": 0, "features": 850, "how": 1450}
         if key in offsets:
             await self.landing_col.scroll_to(offset=offsets[key], duration=450,
                                              curve=ft.AnimationCurve.EASE_OUT_CUBIC)
@@ -160,16 +161,16 @@ class SmushApp:
     # ---------------- Animación del hero ----------------
     async def _squish_loop(self) -> None:
         while True:
-            await asyncio.sleep(1.8)
+            await asyncio.sleep(delay=1.8)
             if not getattr(self, "hero_shape", None) or not self.landing_view.visible:
                 continue
             try:
                 self.hero_shape.scale = ft.Scale(scale_x=1.14, scale_y=0.82)
                 self.hero_shape.update()
-                await asyncio.sleep(0.7)
+                await asyncio.sleep(delay=0.7)
                 self.hero_shape.scale = ft.Scale(scale_x=0.96, scale_y=1.05)
                 self.hero_shape.update()
-                await asyncio.sleep(0.35)
+                await asyncio.sleep(delay=0.35)
                 self.hero_shape.scale = ft.Scale()
                 self.hero_shape.update()
             except RuntimeError:
@@ -178,7 +179,7 @@ class SmushApp:
     # ---------------- Eventos de la herramienta ----------------
     async def pick_files(self, _e) -> None:
         picker = ft.FilePicker()
-        files = await picker.pick_files(
+        files: list[ft.FilePickerFile] = await picker.pick_files(
             dialog_title="Elegí imágenes para comprimir",
             file_type=ft.FilePickerFileType.CUSTOM,
             allowed_extensions=[ext.lstrip(".") for ext in ACCEPTED],
@@ -188,7 +189,7 @@ class SmushApp:
             return
         added = 0
         for f in files:
-            if not f.path or ext_of(f.name) not in ACCEPTED:
+            if not f.path or ext_of(filename=f.name) not in ACCEPTED:
                 continue
             path = Path(f.path)
             if path.exists() and path not in self.pending:
@@ -199,7 +200,7 @@ class SmushApp:
 
     def on_slider_change(self, e) -> None:  # noqa: ANN001
         percent = int(e.control.value)
-        self.ratio_readout.value = str(percent)
+        self.ratio_readout.value = str(object=percent)
         self.squeeze_canvas.shapes = squeeze_shapes(percent)
         self.page.update()
 
@@ -219,8 +220,8 @@ class SmushApp:
     # ---------------- Render de listas ----------------
     def refresh_lists(self) -> None:
         self.file_list_col.controls.clear()
-        for i, path in enumerate(self.pending):
-            self.file_list_col.controls.append(pending_row(i, path, self.remove_file))
+        for i, path in enumerate(iterable=self.pending):
+            self.file_list_col.controls.append(pending_row(i, path, remove_cb=self.remove_file))
         has_files = bool(self.pending)
         self.list_panel.visible = has_files
         self.config_panel.visible = has_files
@@ -235,13 +236,13 @@ class SmushApp:
         self.compressing = True
         self.compress_btn.disabled = True
         self.compress_btn.opacity = 0.55
-        _btn_content = self.compress_btn.content
+        _btn_content: ft.Control | None = self.compress_btn.content
         assert isinstance(_btn_content, ft.Text), "compress_btn content must be Text"
         _btn_content.value = "Comprimiendo…"
         self.page.update()
 
-        _slider_val = self.slider.value
-        ratio = int(_slider_val if _slider_val is not None else 50) / 100
+        _slider_val: int | float | None = self.slider.value
+        ratio: float = int(_slider_val if _slider_val is not None else 50) / 100
         try:
             metas = await asyncio.to_thread(self._compress_sync, ratio)
             self.results = metas
@@ -258,32 +259,32 @@ class SmushApp:
     def _compress_sync(self, ratio: float) -> list[dict]:
         """CPU-bound vía Pillow; corre en un hilo aparte (asyncio.to_thread)."""
         cleanup_old_jobs()
-        job_dir = BASE_TMP / uuid.uuid4().hex
-        out_dir = job_dir / "out"
+        job_dir: Path = BASE_TMP / uuid.uuid4().hex
+        out_dir: Path = job_dir / "out"
         out_dir.mkdir(parents=True)
 
         results: list[dict] = []
         used_names: set[str] = set()
         for path in self.pending:
             stem, ext = path.stem, path.suffix.lower()
-            name = f"{stem}{ext}"
+            name: str = f"{stem}{ext}"
             counter = 1
             while name in used_names or (out_dir / name).exists():
                 name = f"{stem}_{counter}{ext}"
                 counter += 1
             used_names.add(name)
-            out_path = out_dir / name
+            out_path: Path = out_dir / name
 
             try:
-                meta = compress_to_target(path, out_path, ratio)
+                meta = compress_to_target(input_path=path, output_path=out_path, target_ratio=ratio)
             except UnsupportedFormatError as err:
-                results.append({"filename": name, "error": str(err)})
+                results.append({"filename": name, "error": str(object=err)})
                 continue
             except Exception as err:  # noqa: BLE001
                 results.append({"filename": name, "error": f"Error al procesar: {err}"})
                 continue
 
-            pct = round(meta["new_size"] / meta["original_size"] * 100, 1)
+            pct = round(number=meta["new_size"] / meta["original_size"] * 100, ndigits=1)
             results.append(
                 {
                     "filename": name,
@@ -292,7 +293,7 @@ class SmushApp:
                     "percent_of_original": pct,
                     "quality": meta["quality"],
                     "note": meta["note"],
-                    "tmp_path": str(out_path),
+                    "tmp_path": str(object=out_path),
                 }
             )
         return results
@@ -300,9 +301,9 @@ class SmushApp:
     def render_results(self) -> None:
         self.result_col.controls.clear()
         any_ok = False
-        for i, r in enumerate(self.results):
+        for i, r in enumerate(iterable=self.results):
             if r.get("error"):
-                self.result_col.controls.append(error_row(i, r["filename"], r["error"]))
+                self.result_col.controls.append(error_row(i, filename=r["filename"], error=r["error"]))
                 continue
             self.result_col.controls.append(result_row(self, i, r))
             any_ok = True
@@ -311,7 +312,7 @@ class SmushApp:
         self.page.update()
 
     # ---------------- Guardado ----------------
-    def make_save_handler(self, result: dict):
+    def make_save_handler(self, result: dict) -> Callable[..., None]:
         def handler(_e) -> None:
             self.page.run_task(self.save_one, result)
 
@@ -319,29 +320,29 @@ class SmushApp:
 
     async def save_one(self, result: dict) -> None:
         picker = ft.FilePicker()
-        dest = await picker.save_file(dialog_title="Guardar imagen comprimida",
+        dest: str | None = await picker.save_file(dialog_title="Guardar imagen comprimida",
                                       file_name=result["filename"])
         if not dest:
             return
-        shutil.copyfile(result["tmp_path"], dest)
-        self._snack(f"Guardada: {dest}")
+        shutil.copyfile(src=result["tmp_path"], dst=dest)
+        self._snack(message=f"Guardada: {dest}")
 
     async def save_zip(self, _e) -> None:
         ok_results = [r for r in self.results if not r.get("error")]
         if not ok_results:
             return
         picker = ft.FilePicker()
-        dest = await picker.save_file(dialog_title="Guardar ZIP",
+        dest: str | None = await picker.save_file(dialog_title="Guardar ZIP",
                                       file_name="imagenes_comprimidas.zip")
         if not dest:
             return
-        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(file=dest, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
             for r in ok_results:
-                zf.write(r["tmp_path"], arcname=r["filename"])
-        self._snack(f"ZIP guardado: {dest}")
+                zf.write(filename=r["tmp_path"], arcname=r["filename"])
+        self._snack(message=f"ZIP guardado: {dest}")
 
     def _snack(self, message: str) -> None:
-        self.page.show_dialog(ft.SnackBar(content=ft.Text(message)))
+        self.page.show_dialog(dialog=ft.SnackBar(content=ft.Text(value=message)))
 
 
 # ------------------------------------------------------------------

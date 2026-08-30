@@ -26,7 +26,7 @@ FONT_BODY = "WorkSans"
 FONT_MONO = "PlexMono"
 
 # ---- Formatos aceptados ----
-ACCEPTED = [".avif", ".webp", ".jpg", ".jpeg", ".png"]
+ACCEPTED: list[str] = [".avif", ".webp", ".jpg", ".jpeg", ".png"]
 
 
 def mono_text(
@@ -34,7 +34,7 @@ def mono_text(
     size: float = 12,
     color: str = INK_SOFT,
     weight: ft.FontWeight = ft.FontWeight.W_400,
-):
+) -> ft.Text:
     """Texto en fuente mono, como los datos y chips del diseño."""
     return ft.Text(value, size=size, color=color, weight=weight, font_family=FONT_MONO)
 
@@ -44,7 +44,7 @@ def neo_panel(content: ft.Control, padding: int | ft.Padding = 22) -> ft.Contain
     return ft.Container(
         content=content,
         bgcolor=SURFACE,
-        border=ft.Border.all(BW, INK),
+        border=ft.Border.all(width=BW, color=INK),
         border_radius=RADIUS,
         padding=padding,
         shadow=ft.BoxShadow(offset=ft.Offset(6, 6), blur_radius=0, color=INK),
@@ -63,17 +63,17 @@ def neo_button(
 ) -> ft.Container:
     """Botón estilo .btn: sombra dura que se desplaza al pasar el mouse."""
     btn = ft.Container(
-        content=ft.Text(label, size=14.5, weight=weight, color=color, font_family=FONT_BODY),
+        content=ft.Text(value=label, size=14.5, weight=weight, color=color, font_family=FONT_BODY),
         bgcolor=bgcolor,
-        border=ft.Border.all(border_width, border_color),
+        border=ft.Border.all(width=border_width, color=border_color),
         border_radius=10,
-        padding=ft.Padding(20, 11, 20, 11),
+        padding=ft.Padding(left=20, top=11, right=20, bottom=11),
         shadow=ft.BoxShadow(
             offset=ft.Offset(*shadow_offset),
             blur_radius=0,
             color=border_color if border_color == INK else INK,
         ),
-        animate_scale=ft.Animation(150, ft.AnimationCurve.EASE_OUT_BACK),
+        animate_scale=ft.Animation(duration=150, curve=ft.AnimationCurve.EASE_OUT_BACK),
         on_click=on_click,
     )
 

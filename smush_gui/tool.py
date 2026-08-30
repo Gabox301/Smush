@@ -4,6 +4,7 @@ Sponsorre: dropzone, slider de objetivo, lista de pendientes, resultados.
 El estado y la lógica de compresión viven en el controlador (app.py).
 """
 from __future__ import annotations
+from typing import Any, Literal
 
 import flet as ft
 import flet.canvas as cv
@@ -27,7 +28,7 @@ from .theme import (
 )
 
 # Re-export para compatibilidad: app.py importa desde .tool
-__all__ = ["build_tool", "error_row", "pending_row", "result_row"]
+__all__: list[str] = ["build_tool", "error_row", "pending_row", "result_row"]
 
 
 # ---------------- Estado y lógica lived en el controlador ----------------
@@ -40,19 +41,19 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
     squeeze_canvas, ratio_readout, slider, compress_btn, file_list_col,
     results_col, zip_btn).
     """
-    app.ratio_readout = mono_text("50", size=14, color=INK, weight=ft.FontWeight.W_500)
+    app.ratio_readout = mono_text(value="50", size=14, color=INK, weight=ft.FontWeight.W_500)
     ratio_badge = ft.Container(
         bgcolor=LIME,
-        border=ft.Border.all(2, INK),
+        border=ft.Border.all(width=2, color=INK),
         border_radius=8,
-        padding=ft.Padding(8, 1, 8, 1),
+        padding=ft.Padding(left=8, top=1, right=8, bottom=1),
         content=app.ratio_readout,
     )
-    app.squeeze_canvas = cv.Canvas(width=160, height=44, shapes=squeeze_shapes(50))
+    app.squeeze_canvas = cv.Canvas(width=160, height=44, shapes=squeeze_shapes(percent=50))
 
-    app.compress_btn = neo_button("Comprimir todo", LIME, INK, on_click=app.compress_click)
-    clear_btn = neo_button(
-        "Vaciar lista", SURFACE, INK_SOFT, border_width=2, shadow_offset=(0, 0),
+    app.compress_btn = neo_button(label="Comprimir todo", bgcolor=LIME, color=INK, on_click=app.compress_click)
+    clear_btn: ft.Container = neo_button(
+        label="Vaciar lista", bgcolor=SURFACE, color=INK_SOFT, border_width=2, shadow_offset=(0, 0),
         on_click=app.clear_all,
     )
 
@@ -69,15 +70,15 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
     label_row = ft.Row(
         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         controls=[
-            ft.Text("Tamaño objetivo", size=16, weight=ft.FontWeight.W_700, color=INK,
+            ft.Text(value="Tamaño objetivo", size=16, weight=ft.FontWeight.W_700, color=INK,
                     font_family=FONT_DISPLAY or None),
             ratio_badge,
         ],
     )
-    hint = mono_text("del peso original — misma resolución, menor calidad de compresión")
+    hint: ft.Text = mono_text(value="del peso original — misma resolución, menor calidad de compresión")
 
     app.config_panel = neo_panel(
-        ft.Column(
+        content=ft.Column(
             spacing=12,
             controls=[
                 label_row,
@@ -85,7 +86,7 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
                 hint,
                 ft.Container(
                     alignment=ft.Alignment.CENTER,
-                    padding=ft.Padding(0, 8, 0, 0),
+                    padding=ft.Padding(left=0, top=8, right=0, bottom=0),
                     content=app.squeeze_canvas,
                 ),
                 ft.Row(spacing=12, controls=[app.compress_btn, clear_btn]),
@@ -94,33 +95,33 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
     )
 
     # ---- Dropzone — panel = área arrastrable (cuadro centrado) ----
-    app.dropzone_icon = ft.Icon(ft.Icons.UPLOAD, size=38, color=INK_SOFT)
-    app.dropzone_sub = mono_text("o hacé clic para elegirlas — AVIF, WEBP, JPEG, PNG", size=13)
+    app.dropzone_icon = ft.Icon(icon=ft.Icons.UPLOAD, size=38, color=INK_SOFT)
+    app.dropzone_sub = mono_text(value="o hacé clic para elegirlas — AVIF, WEBP, JPEG, PNG", size=13)
     dropzone_content = ft.Column(
         spacing=8,
         alignment=ft.MainAxisAlignment.CENTER,
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         controls=[
             app.dropzone_icon,
-            ft.Text("Arrastrá imágenes acá", size=20, weight=ft.FontWeight.W_700,
+            ft.Text(value="Arrastrá imágenes acá", size=20, weight=ft.FontWeight.W_700,
                     color=INK, font_family=FONT_DISPLAY or None, text_align=ft.TextAlign.CENTER),
             ft.Container(height=4),
             app.dropzone_sub,
         ],
     )
     # El neo_panel ES el cuadro: compacto (260) para que entren controles sin scrollear
-    dropzone = neo_panel(dropzone_content)
+    dropzone: ft.Container = neo_panel(content=dropzone_content)
     dropzone.width = 260
     dropzone.height = 260
     dropzone.alignment = ft.Alignment.CENTER
     dropzone.on_click = app.pick_files
     # Borde inicial suave, hover lo oscurece
-    dropzone.border = ft.Border.all(BW, INK_SOFT)
+    dropzone.border = ft.Border.all(width=BW, color=INK_SOFT)
 
     def handle_hover(e: ft.Event) -> None:
         hovered = bool(e.data)
-        dropzone.border = ft.Border.all(BW, LIME_DARK if hovered else INK_SOFT)
-        new_color = INK if hovered else INK_SOFT
+        dropzone.border = ft.Border.all(width=BW, color=LIME_DARK if hovered else INK_SOFT)
+        new_color: Literal['#17170f'] | Literal['#5a5847'] = INK if hovered else INK_SOFT
         app.dropzone_icon.color = new_color
         app.dropzone_sub.color = new_color
         dropzone.update()
@@ -134,15 +135,15 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
 
     # ---- Lista de pendientes / resultados ----
     app.file_list_col = ft.Column(spacing=12)
-    list_panel = neo_panel(app.file_list_col)
+    list_panel: ft.Container = neo_panel(content=app.file_list_col)
 
     app.result_col = ft.Column(spacing=12)
-    app.zip_btn = neo_button("Guardar todo (.zip)", BLUE, "#fdfcf6", on_click=app.save_zip)
+    app.zip_btn = neo_button(label="Guardar todo (.zip)", bgcolor=BLUE, color="#fdfcf6", on_click=app.save_zip)
     app.zip_btn.visible = False
-    title = ft.Text("Resultado", size=20, weight=ft.FontWeight.W_800, color=INK,
+    title = ft.Text(value="Resultado", size=20, weight=ft.FontWeight.W_800, color=INK,
                     font_family=FONT_DISPLAY or None)
-    results_panel = neo_panel(
-        ft.Column(
+    results_panel: ft.Container = neo_panel(
+        content=ft.Column(
             spacing=16,
             controls=[
                 ft.Row(wrap=True, alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -157,42 +158,42 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
         width=40,
         height=40,
         bgcolor=LIME,
-        border=ft.Border.all(BW, INK),
+        border=ft.Border.all(width=BW, color=INK),
         border_radius=999,
         alignment=ft.Alignment.CENTER,
-        shadow=ft.BoxShadow(offset=ft.Offset(3, 3), blur_radius=0, color=INK),
-        content=brand_icon(22),
+        shadow=ft.BoxShadow(offset=ft.Offset(x=3, y=3), blur_radius=0, color=INK),
+        content=brand_icon(size=22),
     )
-    brand_name = ft.Text("Smush", size=30, weight=ft.FontWeight.W_900, color=INK,
+    brand_name = ft.Text(value="Smush", size=30, weight=ft.FontWeight.W_900, color=INK,
                          font_family=FONT_DISPLAY or None)
     brand = ft.Container(on_click=app.go_landing,
                          content=ft.Row(spacing=10, controls=[brand_mark, brand_name]))
-    back_btn = neo_button(
-        "← Volver al inicio",
-        SURFACE,
-        INK,
+    back_btn: ft.Container = neo_button(
+        label="← Volver al inicio",
+        bgcolor=SURFACE,
+        color=INK,
         on_click=app.go_landing,
         border_width=2,
         shadow_offset=(2, 2),
     )
     tagline = ft.Container(
         bgcolor=SURFACE,
-        border=ft.Border.all(2, INK),
+        border=ft.Border.all(width=2, color=INK),
         border_radius=20,
-        rotate=ft.Rotate(-0.035),
-        padding=ft.Padding(14, 6, 14, 6),
-        content=mono_text("achica el peso, no la imagen", size=12.5, color=INK),
+        rotate=ft.Rotate(angle=-0.035),
+        padding=ft.Padding(left=14, top=6, right=14, bottom=6),
+        content=mono_text(value="achica el peso, no la imagen", size=12.5, color=INK),
     )
     topbar = ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True,
                     controls=[brand, tagline, back_btn])
     footer = ft.Container(
         alignment=ft.Alignment.CENTER,
-        content=mono_text("Las imágenes se procesan en tu máquina y se guardan solo donde elijas."),
+        content=mono_text(value="Las imágenes se procesan en tu máquina y se guardan solo donde elijas."),
     )
 
     # Column scrolleable necesita altura acotada (docs: height + width + scroll).
     # Altura = ventana - padding (70+40) para que quepa sin recorte y el slider se vea.
-    _h = getattr(app.page, "height", None) or getattr(app.page.window, "height", 700) or 700
+    _h: Any | int = getattr(app.page, "height", None) or getattr(app.page.window, "height", 700) or 700
     _h = max(380, int(_h * 0.85))  # 85% de la ventana, deja ver controles sin scrollear
     app.main_column = ft.Column(
         spacing=26,
@@ -214,7 +215,7 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
         content=ft.Container(
             expand=True,
             clip_behavior=ft.ClipBehavior.NONE,
-            padding=ft.Padding(24, 40, 24, 70),
+            padding=ft.Padding(left=24, top=40, right=24, bottom=70),
             content=app.main_column,
         ),
     )

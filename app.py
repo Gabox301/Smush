@@ -32,7 +32,7 @@ app = FastAPI(title="Smush — compresor de imágenes (API)")
 
 MAX_CONTENT_LENGTH = 60 * 1024 * 1024  # 60 MB por request
 
-BASE_TMP = Path(tempfile.gettempdir()) / "image-compressor-jobs"
+BASE_TMP: Path = Path(tempfile.gettempdir()) / "image-compressor-jobs"
 BASE_TMP.mkdir(parents=True, exist_ok=True)
 
 # job_id -> {"dir": Path, "created": float, "files": {filename: Path}}
@@ -41,26 +41,26 @@ JOB_TTL_SECONDS = 60 * 30  # limpiar trabajos de más de 30 minutos
 
 
 def _cleanup_old_jobs() -> None:
-    now = time.time()
-    expired = [jid for jid, job in JOBS.items() if now - job["created"] > JOB_TTL_SECONDS]
+    now: float = time.time()
+    expired: list[str] = [jid for jid, job in JOBS.items() if now - job["created"] > JOB_TTL_SECONDS]
     for jid in expired:
         shutil.rmtree(JOBS[jid]["dir"], ignore_errors=True)
         JOBS.pop(jid, None)
 
 
-@app.post("/api/compress")
+@app.post(path="/api/compress")
 async def api_compress(
     request: Request,
     images: list[UploadFile] = File(default=[]),
     ratio: str = Form(default="0.5"),
-):
+) -> JSONResponse:
     # Límite de tamaño similar a Flask MAX_CONTENT_LENGTH
-    clen = request.headers.get("content-length")
+    clen: str | None = request.headers.get("content-length")
     if clen is not None:
         try:
             if int(clen) > MAX_CONTENT_LENGTH:
                 return JSONResponse(
-                    {"error": "El tamaño total excede el límite de 60 MB."},
+                    content={"error": "El tamaño total excede el límite de 60 MB."},
                     status_code=413,
                 )
         except ValueError:
@@ -69,22 +69,22 @@ async def api_compress(
     _cleanup_old_jobs()
 
     if not images or all(not f.filename for f in images):
-        return JSONResponse({"error": "No se recibió ninguna imagen."}, status_code=400)
+        return JSONResponse(content={"error": "No se recibió ninguna imagen."}, status_code=400)
 
     try:
         ratio_val = float(ratio)
     except ValueError:
-        return JSONResponse({"error": "Ratio inválido."}, status_code=400)
+        return JSONResponse(content={"error": "Ratio inválido."}, status_code=400)
 
     if not (0.05 <= ratio_val <= 0.95):
         return JSONResponse(
-            {"error": "El ratio debe estar entre 5% y 95%."}, status_code=400
+            content={"error": "El ratio debe estar entre 5% y 95%."}, status_code=400
         )
 
-    job_id = uuid.uuid4().hex
-    job_dir = BASE_TMP / job_id
-    input_dir = job_dir / "in"
-    output_dir = job_dir / "out"
+    job_id: str = uuid.uuid4().hex
+    job_dir: Path = BASE_TMP / job_id
+    input_dir: Path = job_dir / "in"
+    output_dir: Path = job_dir / "out"
     input_dir.mkdir(parents=True)
     output_dir.mkdir(parents=True)
 
@@ -92,11 +92,11 @@ async def api_compress(
     output_paths: dict[str, Path] = {}
 
     for f in images:
-        original_name = Path(f.filename or "imagen").name
+        original_name: str = Path(f.filename or "imagen").name
         # Si filename viene vacío, generar uno
         if not original_name or original_name == "imagen":
             original_name = f"imagen_{uuid.uuid4().hex[:6]}"
-        ext = Path(original_name).suffix.lower()
+        ext: str = Path(original_name).suffix.lower()
 
         if ext not in SUPPORTED_EXTENSIONS:
             results.append(
@@ -107,12 +107,12 @@ async def api_compress(
             )
             continue
 
-        in_path = input_dir / original_name
-        out_path = output_dir / original_name
+        in_path: Path = input_dir / original_name
+        out_path: Path = output_dir / original_name
 
         # Manejar colisión de nombres dentro del mismo job evitando overwrite
         counter = 1
-        stem = in_path.stem
+        stem: str = in_path.stem
         while in_path.exists() or out_path.exists():
             original_name = f"{stem}_{counter}{ext}"
             in_path = input_dir / original_name
@@ -120,8 +120,8 @@ async def api_compress(
             counter += 1
 
         try:
-            contents = await f.read()
-            in_path.write_bytes(contents)
+            contents: bytes = await f.read()
+            in_path.write_bytes(data=contents)
         except Exception as e:  # noqa: BLE001
             results.append(
                 {"filename": original_name, "error": f"Error al guardar: {e}"}
@@ -132,7 +132,7 @@ async def api_compress(
             meta = await run_in_threadpool(
                 compress_to_target, in_path, out_path, ratio_val
             )
-            pct = round(meta["new_size"] / meta["original_size"] * 100, 1)
+            pct = round(number=meta["new_size"] / meta["original_size"] * 100, ndigits=1)
             results.append(
                 {
                     "filename": original_name,
@@ -148,7 +148,7 @@ async def api_compress(
             )
             output_paths[original_name] = out_path
         except UnsupportedFormatError as e:
-            results.append({"filename": original_name, "error": str(e)})
+            results.append({"filename": original_name, "error": str(object=e)})
         except Exception as e:  # noqa: BLE001
             results.append(
                 {"filename": original_name, "error": f"Error al procesar: {e}"}
@@ -157,7 +157,7 @@ async def api_compress(
     JOBS[job_id] = {"dir": job_dir, "created": time.time(), "files": output_paths}
 
     return JSONResponse(
-        {
+        content={
             "job_id": job_id,
             "ratio": ratio_val,
             "results": results,
@@ -166,8 +166,8 @@ async def api_compress(
     )
 
 
-@app.get("/api/download/{job_id}/{filename:path}")
-async def api_download(job_id: str, filename: str):
+@app.get(path="/api/download/{job_id}/{filename:path}")
+async def api_download(job_id: str, filename: str) -> FileResponse:
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="El trabajo expiró o no existe.")
@@ -177,34 +177,34 @@ async def api_download(job_id: str, filename: str):
     return FileResponse(path, filename=filename)
 
 
-@app.get("/api/download-zip/{job_id}")
-async def api_download_zip(job_id: str):
+@app.get(path="/api/download-zip/{job_id}")
+async def api_download_zip(job_id: str) -> StreamingResponse:
     job = JOBS.get(job_id)
     if not job or not job["files"]:
         raise HTTPException(status_code=404, detail="El trabajo expiró o no existe.")
 
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(file=buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for fname, path in job["files"].items():
-            zf.write(path, arcname=fname)
+            zf.write(filename=path, arcname=fname)
     buffer.seek(0)
 
-    headers = {"Content-Disposition": 'attachment; filename="imagenes_comprimidas.zip"'}
-    return StreamingResponse(buffer, media_type="application/zip", headers=headers)
+    headers: dict[str, str] = {"Content-Disposition": 'attachment; filename="imagenes_comprimidas.zip"'}
+    return StreamingResponse(content=buffer, media_type="application/zip", headers=headers)
 
 
-@app.get("/api/health")
-async def health():
+@app.get(path="/api/health")
+async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/json/version")
-async def json_version():
+@app.get(path="/json/version")
+async def json_version() -> dict[str, str]:
     # Expuesto porque probes externos lo piden; devuelve versión del paquete
     try:
         from importlib.metadata import version as pkg_version
 
-        ver = pkg_version("smush")
+        ver: str = pkg_version(distribution_name="smush")
     except Exception:
         ver = "0.1.0"
     return {"version": ver}
@@ -213,4 +213,4 @@ async def json_version():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app:app", host="127.0.0.1", port=5000, reload=True)
+    uvicorn.run(app="app:app", host="127.0.0.1", port=5000, reload=True)

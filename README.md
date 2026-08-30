@@ -53,32 +53,6 @@ uv sync --frozen
 uv run uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2
 ```
 
-## Desplegar con Docker
-
-```bash
-docker build -t smush .
-docker run -p 8000:8000 smush
-```
-
-Abrí `http://localhost:8000`.
-
-## Desplegar en un servicio cloud
-
-La imagen de Docker de arriba funciona tal cual en cualquier
-plataforma que acepte contenedores, por ejemplo:
-
-- **Render** / **Railway** / **Fly.io**: conectá el repo, estas
-  plataformas detectan el `Dockerfile` automáticamente.
-- **Google Cloud Run**:
-  ```bash
-  gcloud builds submit --tag gcr.io/TU_PROYECTO/smush
-  gcloud run deploy --image gcr.io/TU_PROYECTO/smush --platform managed
-  ```
-- **AWS App Runner / ECS**: subí la imagen a ECR y apuntá el
-  servicio a ella.
-
-No necesita base de datos ni variables de entorno para funcionar.
-
 ## Notas de producción
 
 - Los archivos subidos y procesados se guardan en una carpeta

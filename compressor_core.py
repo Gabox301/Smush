@@ -2,46 +2,33 @@
 Núcleo de compresión de imágenes.
 
 Comprime imágenes (AVIF, WEBP, JPEG, PNG) a un porcentaje objetivo de su
-tamaño original en bytes, manteniendo siempre las dimensiones originales.
-Usa búsqueda binaria sobre el parámetro "quality" (o la paleta de colores,
-en el caso de PNG) para encontrar el valor más alto que aún cumple el
-tamaño objetivo (mejor calidad posible dentro del presupuesto de peso
-pedido).
+ tamaño original en bytes, manteniendo las dimensiones originales.
 
-Cambios respecto a la versión anterior:
-- La búsqueda binaria codifica en memoria (io.BytesIO) en vez de escribir
-  a disco en cada iteración: mismo resultado, mucho más rápido, y sin
-  desgaste de disco en un backend que procesa muchos requests.
-- Se corrige la orientación EXIF antes de comprimir (fotos de celular que
-  antes podían terminar rotadas al perder el tag de orientación).
-- Al convertir a JPEG una imagen con transparencia (RGBA o paleta con
-  transparencia) ahora se aplana sobre un fondo en vez de descartar el
-  canal alfa a lo bruto, lo que evitaba bordes oscuros/artefactos.
-- Se conserva el perfil de color (ICC) al guardar, para no perder
-  fidelidad de color.
-- Cuantización de PNG: intenta primero el cuantizador libimagequant
-  (mejor calidad perceptual) y cae a FASTOCTREE con dithering si no está
-  disponible en el build de Pillow instalado.
-- AVIF/WEBP usan parámetros de encoder pensados para mejor calidad por
-  byte (speed bajo en AVIF, method=6 en WEBP), aceptable porque esto
-  corre server-side y no en tiempo real.
-- Salvaguarda: si ni siquiera con la calidad mínima se logra un archivo
-  más chico que el original, se conserva el original en vez de "mejorar"
-  a un archivo más pesado (antes esto solo estaba cubierto para PNG).
-- El resultado incluye una estimación de calidad (PSNR en dB) para poder
-  mostrarle al usuario cuánta pérdida perceptual implicó la compresión,
-  no solo el ratio de tamaño logrado. numpy es opcional: si no está
-  instalado, el compresor funciona igual y simplemente no calcula PSNR
-  (psnr_db queda en None).
+Mejoras principales respecto a la versión anterior:
+- Búsqueda binaria para JPEG/WEBP/AVIF y búsqueda discreta más segura para PNG.
+- Optimización lossless de PNG antes de cuantizar.
+- Validación de parámetros de entrada.
+- Evita recomprimir si el objetivo no exige reducir el archivo o si la calidad
+  mínima ya no puede mejorar el tamaño respecto del original.
+- Preserva ICC y, opcionalmente, EXIF cuando el encoder lo admite.
+- Para JPEG, permite elegir el fondo usado al aplanar transparencia.
+- PSNR coherente con la representación visual final, incluyendo alfa/JPEG.
+- Metadata de resultado más completa: ratio alcanzado, ahorro y si se logró
+  el objetivo.
+- No carga los bytes originales completos en memoria para conservar el archivo.
 """
 
 from __future__ import annotations
 
 import io
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
 from PIL import Image, ImageOps
+from PIL.ImageFile import ImageFile
+from numpy import float64
+from numpy._typing._array_like import NDArray
 
 if TYPE_CHECKING:
     import numpy as np
@@ -49,13 +36,14 @@ if TYPE_CHECKING:
 try:
     import numpy as np  # type: ignore[no-redef]
     _HAS_NUMPY = True
-except ImportError:  # numpy es opcional: solo se usa para la métrica PSNR
+except ImportError:  # numpy es opcional: solo se usa para PSNR
     np = None  # type: ignore[assignment]
     _HAS_NUMPY = False
 
-QUALITY_FORMATS = {"AVIF", "WEBP", "JPEG"}
 
-EXTENSION_TO_FORMAT = {
+QUALITY_FORMATS: set[str] = {"AVIF", "WEBP", "JPEG"}
+
+EXTENSION_TO_FORMAT: dict[str, str] = {
     ".avif": "AVIF",
     ".webp": "WEBP",
     ".jpg": "JPEG",
@@ -63,18 +51,22 @@ EXTENSION_TO_FORMAT = {
     ".png": "PNG",
 }
 
-SUPPORTED_EXTENSIONS = set(EXTENSION_TO_FORMAT.keys())
+SUPPORTED_EXTENSIONS: set[str] = set(EXTENSION_TO_FORMAT.keys())
 
-# Valores de encoder pensados para maximizar calidad por byte. Esto corre
-# en un backend, no en tiempo real, así que preferimos "lento pero mejor".
-AVIF_SPEED = 4  # 0 = más lento/mejor compresión, 10 = más rápido/peor
-WEBP_METHOD = 6  # método de compresión más exhaustivo (0-6)
+# Valores pensados para maximizar calidad por byte en backend.
+AVIF_SPEED = 4  # 0 = más lento/mejor, 10 = más rápido/peor
+WEBP_METHOD = 6
 
-FLATTEN_BACKGROUND = (255, 255, 255)  # fondo usado al aplanar transparencia para JPEG
+FLATTEN_BACKGROUND = (255, 255, 255)
+
+# PNG: candidatos explícitos. Es preferible no asumir monotonicidad perfecta
+# entre "quality" y tamaño cuando cambia la paleta.
+PNG_COLOR_CANDIDATES = (16, 32, 64, 96, 128, 160, 192, 224, 256)
+PNG_LOSSLESS_QUALITY = 100
 
 
 class UnsupportedFormatError(Exception):
-    pass
+    """La extensión del archivo no está soportada."""
 
 
 def format_for_extension(ext: str) -> str:
@@ -84,9 +76,20 @@ def format_for_extension(ext: str) -> str:
     return EXTENSION_TO_FORMAT[ext]
 
 
+def _validate_parameters(target_ratio: float, min_quality: int, max_quality: int) -> None:
+    if not 0 < target_ratio <= 1:
+        raise ValueError("target_ratio debe estar entre 0 (exclusivo) y 1 (inclusive)")
+    if not 1 <= min_quality <= 100:
+        raise ValueError("min_quality debe estar entre 1 y 100")
+    if not 1 <= max_quality <= 100:
+        raise ValueError("max_quality debe estar entre 1 y 100")
+    if min_quality > max_quality:
+        raise ValueError("min_quality no puede ser mayor que max_quality")
+
+
 def _prepare_image(im: Image.Image) -> Image.Image:
     """Corrige orientación EXIF antes de cualquier otra operación."""
-    return ImageOps.exif_transpose(im) or im
+    return ImageOps.exif_transpose(image=im) or im
 
 
 def _has_transparency(im: Image.Image) -> bool:
@@ -94,18 +97,20 @@ def _has_transparency(im: Image.Image) -> bool:
         return True
     if im.mode == "P" and "transparency" in im.info:
         return True
-    return False
+    return "A" in im.getbands()
 
 
-def _flatten_for_jpeg(im: Image.Image, background=FLATTEN_BACKGROUND) -> Image.Image:
-    """Aplana transparencia sobre un fondo sólido en vez de descartar el
-    canal alfa directamente (lo que dejaba bordes oscuros en PNG/WEBP con
-    transparencia parcial al convertir a JPEG)."""
+def _flatten_for_jpeg(
+    im: Image.Image,
+    background: tuple[int, int, int] = FLATTEN_BACKGROUND,
+) -> Image.Image:
+    """Aplana transparencia sobre un fondo sólido para JPEG."""
     if not _has_transparency(im):
-        return im.convert("RGB") if im.mode != "RGB" else im
-    rgba = im.convert("RGBA")
-    flat = Image.new("RGB", rgba.size, background)
-    flat.paste(rgba, mask=rgba.split()[3])
+        return im.convert(mode="RGB") if im.mode != "RGB" else im
+
+    rgba: Image.Image = im.convert(mode="RGBA")
+    flat: Image.Image = Image.new(mode="RGB", size=rgba.size, color=background)
+    flat.paste(im=rgba, mask=rgba.getchannel(channel="A"))
     return flat
 
 
@@ -113,60 +118,150 @@ def _icc_profile(im: Image.Image) -> Optional[bytes]:
     return im.info.get("icc_profile")
 
 
-def _encode(im: Image.Image, fmt: str, quality: int) -> bytes:
+def _exif_bytes(im: Image.Image, preserve_exif: bool) -> Optional[bytes]:
+    if not preserve_exif:
+        return None
+    try:
+        exif: Image.Exif = im.getexif()
+        if not exif:
+            return None
+        # exif_transpose ha aplicado físicamente la orientación; para evitar
+        # que un visor vuelva a rotarla, dejamos Orientation = 1.
+        orientation_tag = 274
+        if orientation_tag in exif:
+            exif[orientation_tag] = 1
+        return exif.tobytes()
+    except Exception:
+        return None
+
+
+def _save_with_optional_metadata(
+    im: Image.Image,
+    buf: io.BytesIO,
+    save_kwargs: dict,
+) -> None:
+    """Guarda una imagen y, si el encoder no admite algún metadata, reintenta."""
+    try:
+        im.save(fp=buf, **save_kwargs)
+    except (TypeError, ValueError):
+        # Algunos builds/formats de Pillow no aceptan EXIF u otras opciones.
+        # Retiramos solo metadata opcional y reintentamos.
+        reduced = dict(save_kwargs)
+        reduced.pop("exif", None)
+        buf.seek(0)
+        buf.truncate(0)
+        im.save(fp=buf, **reduced)
+
+
+def _encode(
+    im: Image.Image,
+    fmt: str,
+    quality: int,
+    *,
+    jpeg_background: tuple[int, int, int] = FLATTEN_BACKGROUND,
+    preserve_exif: bool = False,
+) -> bytes:
     """Codifica la imagen en memoria y devuelve los bytes resultantes."""
     buf = io.BytesIO()
     save_kwargs = {"format": fmt, "quality": quality}
-    icc = _icc_profile(im)
+
+    icc: bytes | None = _icc_profile(im)
     if icc:
         save_kwargs["icc_profile"] = icc
 
-    work_im = im
+    exif: bytes | None = _exif_bytes(im, preserve_exif)
+    if exif:
+        save_kwargs["exif"] = exif
+
+    work_im: Image.Image = im
     if fmt == "JPEG":
-        work_im = _flatten_for_jpeg(im)
+        work_im = _flatten_for_jpeg(im, background=jpeg_background)
     elif fmt == "WEBP":
         save_kwargs["method"] = WEBP_METHOD
     elif fmt == "AVIF":
         save_kwargs["speed"] = AVIF_SPEED
 
-    work_im.save(buf, **save_kwargs)
+    _save_with_optional_metadata(work_im, buf, save_kwargs)
     return buf.getvalue()
 
 
 def _quantize_for_png(im: Image.Image, colors: int) -> Image.Image:
-    """Cuantiza a una paleta de `colors` colores. Prueba libimagequant
-    (mejor calidad perceptual) y cae a FASTOCTREE con dithering si el
-    build de Pillow no lo tiene compilado."""
-    work_im = im
+    """Cuantiza a una paleta de `colors` colores con buen fallback."""
+    work_im: Image.Image = im
     if work_im.mode not in ("RGB", "RGBA"):
-        work_im = work_im.convert("RGBA" if "transparency" in im.info or "A" in im.getbands() else "RGB")
+        use_alpha: bool = _has_transparency(im)
+        work_im = work_im.convert(mode="RGBA" if use_alpha else "RGB")
+
     try:
-        return work_im.quantize(colors=colors, method=Image.Quantize.LIBIMAGEQUANT, dither=Image.Dither.FLOYDSTEINBERG)
+        return work_im.quantize(
+            colors=colors,
+            method=Image.Quantize.LIBIMAGEQUANT,
+            dither=Image.Dither.FLOYDSTEINBERG,
+        )
     except Exception:
-        return work_im.quantize(colors=colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.FLOYDSTEINBERG)
+        return work_im.quantize(
+            colors=colors,
+            method=Image.Quantize.FASTOCTREE,
+            dither=Image.Dither.FLOYDSTEINBERG,
+        )
 
 
 def _colors_for_quality(quality: int) -> int:
+    """Mapeo compatible con la API anterior, acotado a 16-256 colores."""
     return max(16, min(256, int(16 + (quality - 10) * (240 / 85))))
 
 
-def _encode_png(im: Image.Image, quality: int) -> bytes:
-    """PNG sin pérdida no tiene 'quality'; lo simulamos cuantizando la paleta.
-    quality >= 92: sin cuantizar (máxima fidelidad, solo optimize).
-    quality 10-91: mapeado a 16-256 colores de paleta."""
+def _encode_png(
+    im: Image.Image,
+    quality: int,
+    *,
+    preserve_exif: bool = False,
+) -> bytes:
+    """Codifica PNG. quality >= 92 conserva la imagen sin cuantizar."""
     buf = io.BytesIO()
-    icc = _icc_profile(im)
-    save_kwargs = {"format": "PNG", "optimize": True, "compress_level": 9}
+    icc: bytes | None = _icc_profile(im)
+    exif: bytes | None = _exif_bytes(im, preserve_exif)
+
+    save_kwargs = {
+        "format": "PNG",
+        "optimize": True,
+        "compress_level": 9,
+    }
     if icc:
         save_kwargs["icc_profile"] = icc
+    if exif:
+        save_kwargs["exif"] = exif
 
     if quality >= 92:
-        im.save(buf, **save_kwargs)
+        _save_with_optional_metadata(im, buf, save_kwargs)
         return buf.getvalue()
 
-    colors = _colors_for_quality(quality)
-    q = _quantize_for_png(im, colors)
-    q.save(buf, **save_kwargs)
+    q: Image.Image = _quantize_for_png(im, colors=_colors_for_quality(quality))
+    _save_with_optional_metadata(q, buf, save_kwargs)
+    return buf.getvalue()
+
+
+def _encode_png_with_colors(
+    im: Image.Image,
+    colors: int,
+    *,
+    preserve_exif: bool = False,
+) -> bytes:
+    """Encode PNG usando un número explícito de colores."""
+    buf = io.BytesIO()
+    icc: bytes | None = _icc_profile(im)
+    exif: bytes | None = _exif_bytes(im, preserve_exif)
+    q: Image.Image = _quantize_for_png(im, colors)
+    save_kwargs = {
+        "format": "PNG",
+        "optimize": True,
+        "compress_level": 9,
+    }
+    if icc:
+        save_kwargs["icc_profile"] = icc
+    if exif:
+        save_kwargs["exif"] = exif
+    _save_with_optional_metadata(q, buf, save_kwargs)
     return buf.getvalue()
 
 
@@ -176,21 +271,21 @@ def _binary_search_quality(
     min_quality: int,
     max_quality: int,
 ) -> tuple[Optional[int], Optional[bytes]]:
-    """Busca la calidad más alta cuyo tamaño codificado quede por debajo
-    de target_size. Devuelve (quality, bytes) o (None, None) si ni la
-    calidad mínima cumple el presupuesto."""
+    """Busca la calidad máxima cuyo tamaño queda dentro del objetivo."""
     lo, hi = min_quality, max_quality
     best_quality: Optional[int] = None
     best_bytes: Optional[bytes] = None
+
     while lo <= hi:
-        mid = (lo + hi) // 2
-        data = encode_fn(mid)
+        mid: int = (lo + hi) // 2
+        data: bytes = encode_fn(mid)
         if len(data) <= target_size:
             best_quality = mid
             best_bytes = data
-            lo = mid + 1
+            lo: int = mid + 1
         else:
-            hi = mid - 1
+            hi: int = mid - 1
+
     return best_quality, best_bytes
 
 
@@ -200,86 +295,202 @@ def _best_effort_encode(
     min_quality: int,
     max_quality: int,
 ) -> tuple[int, bytes, bool]:
-    """Envoltorio sobre _binary_search_quality que nunca devuelve None:
-    si ni la calidad mínima entra en el presupuesto, devuelve igual la
-    calidad mínima codificada (con reached_target=False) en vez de
-    propagar un `bytes | None` que después habría que estar chequeando
-    en cada punto de uso."""
-    quality, data = _binary_search_quality(encode_fn, target_size, min_quality, max_quality)
+    """Versión segura de la búsqueda binaria."""
+    quality, data = _binary_search_quality(
+        encode_fn, target_size, min_quality, max_quality
+    )
     if quality is not None and data is not None:
         return quality, data, True
+
     return min_quality, encode_fn(min_quality), False
 
 
+def _best_png_encode(
+    im: Image.Image,
+    target_size: float,
+    min_quality: int,
+    max_quality: int,
+    *,
+    preserve_exif: bool = False,
+) -> tuple[int, bytes, bool, str]:
+    """Busca la mejor variante PNG sin asumir monotonicidad de quality->bytes.
+
+    Primero prueba PNG lossless. Si no alcanza, prueba explícitamente varias
+    paletas y escoge la de mayor número de colores que cumple el presupuesto.
+    """
+    if max_quality >= 92:
+        lossless: bytes = _encode_png(im, quality=PNG_LOSSLESS_QUALITY, preserve_exif=preserve_exif)
+        if len(lossless) <= target_size:
+            return PNG_LOSSLESS_QUALITY, lossless, True, "PNG optimizado sin pérdida"
+
+    candidate_colors = list(PNG_COLOR_CANDIDATES)
+    # Convertimos los límites de quality a un rango de colores razonable.
+    min_colors: int = _colors_for_quality(quality=min_quality)
+    max_colors: int = _colors_for_quality(quality=max_quality)
+    candidate_colors: list[int] = [c for c in candidate_colors if min_colors <= c <= max_colors]
+
+    # Aseguramos que siempre haya al menos una prueba en cada extremo.
+    candidate_colors = sorted(set(candidate_colors + [min_colors, max_colors]))
+
+    best_colors: Optional[int] = None
+    best_bytes: Optional[bytes] = None
+    for colors in candidate_colors:
+        data: bytes = _encode_png_with_colors(
+            im,
+            colors,
+            preserve_exif=preserve_exif,
+        )
+        if len(data) <= target_size and (
+            best_colors is None or colors > best_colors
+        ):
+            best_colors = colors
+            best_bytes = data
+
+    if best_colors is None or best_bytes is None:
+        # Probamos la paleta mínima incluso si cae fuera de los candidatos.
+        data = _encode_png_with_colors(
+            im,
+            colors=min_colors,
+            preserve_exif=preserve_exif,
+        )
+        return min_quality, data, False, "No se pudo alcanzar el objetivo ni con la paleta mínima"
+
+    # La calidad devuelta es una aproximación consistente con la función
+    # anterior; el dato realmente utilizado por PNG es el número de colores.
+    quality: int = max(
+        min_quality,
+        min(
+            max_quality,
+            round(number=10 + (best_colors - 16) * 85 / 240),
+        ),
+    )
+    return quality, best_bytes, True, f"PNG cuantizado a {best_colors} colores"
+
+
 def _to_rgb_safe(img: Image.Image) -> Image.Image:
-    """Evita el warning de Pillow al convertir paletas con transparencia
-    en bytes directamente a RGB (recomienda pasar por RGBA primero)."""
     if img.mode == "P":
-        img = img.convert("RGBA")
-    return img.convert("RGB")
+        img = img.convert(mode="RGBA" if _has_transparency(im=img) else "RGB")
+    return img.convert(mode="RGB")
 
 
-def _psnr(original: Image.Image, compressed_bytes: bytes) -> Optional[float]:
-    """PSNR en dB entre la imagen original y el resultado comprimido, como
-    estimación rápida de pérdida perceptual (no reemplaza una inspección
-    visual, pero da una señal numérica de "cuánto se tocó" la imagen).
-    Devuelve None si numpy no está instalado o si algo falla al decodificar."""
+def _visual_reference(
+    original: Image.Image,
+    *,
+    fmt: str,
+    jpeg_background: tuple[int, int, int],
+) -> Image.Image:
+    """Normaliza la imagen original a la misma representación que se evalúa."""
+    if fmt == "JPEG":
+        return _flatten_for_jpeg(im=original, background=jpeg_background)
+    return _to_rgb_safe(img=original)
+
+
+def _psnr(
+    original: Image.Image,
+    compressed_bytes: bytes,
+    *,
+    fmt: str,
+    jpeg_background: tuple[int, int, int],
+) -> Optional[float]:
+    """Calcula PSNR sobre la representación visual final."""
     if not _HAS_NUMPY or np is None:
         return None
 
     try:
-        decoded = Image.open(io.BytesIO(compressed_bytes))
+        decoded: ImageFile = Image.open(fp=io.BytesIO(initial_bytes=compressed_bytes))
         decoded.load()
     except Exception:
         return None
 
-    a = np.asarray(_to_rgb_safe(original), dtype=np.float64)
-    b = np.asarray(_to_rgb_safe(decoded), dtype=np.float64)
+    try:
+        a: NDArray[float64] = np.asarray(
+            a=_visual_reference(
+                original,
+                fmt=fmt,
+                jpeg_background=jpeg_background,
+            ),
+            dtype=np.float64,
+        )
+        b: NDArray[float64] = np.asarray(a=_to_rgb_safe(img=decoded), dtype=np.float64)
+    except Exception:
+        return None
+
     if a.shape != b.shape:
         return None
 
-    mse = np.mean((a - b) ** 2)
+    mse: float64 = np.mean(a=(a - b) ** 2)
     if mse == 0:
-        return 99.0  # idéntico (o prácticamente idéntico)
-    # round + float(): que el resultado sea un float nativo de Python,
-    # no np.float64, para que sea serializable a JSON tal cual en el
-    # endpoint /api/compress sin conversiones adicionales.
-    return round(float(20 * np.log10(255.0) - 10 * np.log10(mse)), 2)
+        return 99.0
+    return round(number=float(20 * np.log10(255.0) - 10 * np.log10(mse)), ndigits=2)
 
 
 def _finalize(
     output_path: Path,
-    original_bytes: bytes,
+    input_path: Path,
     original_size: int,
     encoded_bytes: bytes,
     quality: int,
     note: Optional[str],
     im: Image.Image,
+    *,
+    target_size: int,
+    target_reached: bool,
+    target_ratio: float,
+    fmt: str,
+    jpeg_background: tuple[int, int, int],
+    preserve_exif: bool,
 ) -> dict:
-    """Escribe el resultado a disco y arma el dict de metadata. Si el
-    resultado "comprimido" termina pesando igual o más que el original,
-    conserva el original en vez de entregar un archivo peor."""
-    if len(encoded_bytes) >= original_size:
-        output_path.write_bytes(original_bytes)
+    """Escribe el resultado y devuelve metadata detallada."""
+    encoded_size: int = len(encoded_bytes)
+
+    if encoded_size >= original_size:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src=input_path, dst=output_path)
         return {
+            "format": fmt,
             "original_size": original_size,
             "new_size": original_size,
+            "target_size": target_size,
+            "target_ratio": target_ratio,
+            "achieved_ratio": 1.0,
+            "savings_percent": 0.0,
+            "target_reached": False,
+            "compression_applied": False,
             "quality": None,
             "width": im.size[0],
             "height": im.size[1],
-            "note": "El original ya era más chico que cualquier recompresión; se conservó sin cambios",
+            "preserve_exif": preserve_exif,
+            "icc_preserved": bool(_icc_profile(im)),
+            "note": "El resultado no era más pequeño que el original; se conservó sin cambios",
             "psnr_db": None,
         }
 
-    output_path.write_bytes(encoded_bytes)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(data=encoded_bytes)
+    achieved_ratio: float = encoded_size / original_size if original_size else 0.0
+
     return {
+        "format": fmt,
         "original_size": original_size,
-        "new_size": len(encoded_bytes),
+        "new_size": encoded_size,
+        "target_size": target_size,
+        "target_ratio": target_ratio,
+        "achieved_ratio": round(number=achieved_ratio, ndigits=6),
+        "savings_percent": round(number=(1 - achieved_ratio) * 100, ndigits=2),
+        "target_reached": bool(target_reached and encoded_size <= target_size),
+        "compression_applied": True,
         "quality": quality,
         "width": im.size[0],
         "height": im.size[1],
+        "preserve_exif": preserve_exif,
+        "icc_preserved": bool(_icc_profile(im)),
         "note": note,
-        "psnr_db": _psnr(im, encoded_bytes),
+        "psnr_db": _psnr(
+            original=im,
+            compressed_bytes=encoded_bytes,
+            fmt=fmt,
+            jpeg_background=jpeg_background,
+        ),
     }
 
 
@@ -289,37 +500,119 @@ def compress_to_target(
     target_ratio: float,
     min_quality: int = 10,
     max_quality: int = 95,
+    *,
+    preserve_exif: bool = False,
+    jpeg_background: tuple[int, int, int] = FLATTEN_BACKGROUND,
 ) -> dict:
-    """
-    Comprime input_path buscando la calidad más alta que da un archivo
-    de tamaño <= target_ratio * tamaño_original. No modifica dimensiones.
-    Devuelve un dict con metadata del resultado.
-    """
-    raw_im = Image.open(input_path)
-    raw_im.load()
-    im = _prepare_image(raw_im)  # corrige orientación EXIF
+    """Comprime `input_path` buscando la mejor calidad dentro del target.
 
-    original_size = input_path.stat().st_size
-    original_bytes = input_path.read_bytes()
-    target_size = max(1, original_size * target_ratio)
-    fmt = format_for_extension(input_path.suffix)
+    `target_ratio` debe estar en (0, 1] y representa el tamaño máximo como
+    fracción del original. Las dimensiones no se modifican.
+    """
+    _validate_parameters(target_ratio, min_quality, max_quality)
 
-    if fmt not in QUALITY_FORMATS:
-        quality, data, reached = _best_effort_encode(
-            lambda q: _encode_png(im, q), target_size, min_quality, max_quality
-        )
-        if reached:
-            note = (
-                f"PNG cuantizado a {_colors_for_quality(quality)} colores"
-                if quality < 92
-                else "PNG optimizado sin pérdida"
+    if not input_path.is_file():
+        raise FileNotFoundError(f"No existe el archivo de entrada: {input_path}")
+    if input_path.resolve() == output_path.resolve():
+        raise ValueError("input_path y output_path deben ser archivos distintos")
+
+    if len(jpeg_background) != 3 or not all(0 <= x <= 255 for x in jpeg_background):
+        raise ValueError("jpeg_background debe ser una tupla RGB de tres enteros 0-255")
+
+    raw_im: ImageFile = Image.open(fp=input_path)
+    try:
+        raw_im.load()
+        im: Image.Image = _prepare_image(im=raw_im)
+
+        original_size: int = input_path.stat().st_size
+        target_size: int = max(1, int(original_size * target_ratio))
+        fmt: str = format_for_extension(ext=input_path.suffix)
+
+        # Si no se pide reducir el archivo, no tiene sentido recompresionar.
+        if target_size >= original_size:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src=input_path, dst=output_path)
+            return {
+                "format": fmt,
+                "original_size": original_size,
+                "new_size": original_size,
+                "target_size": target_size,
+                "target_ratio": target_ratio,
+                "achieved_ratio": 1.0,
+                "savings_percent": 0.0,
+                "target_reached": True,
+                "compression_applied": False,
+                "quality": None,
+                "width": im.size[0],
+                "height": im.size[1],
+                "preserve_exif": preserve_exif,
+                "icc_preserved": bool(_icc_profile(im)),
+                "note": "El objetivo no exige reducir el tamaño; se conservó el original",
+                "psnr_db": None,
+            }
+
+        if fmt == "PNG":
+            quality, data, reached, note = _best_png_encode(
+                im,
+                target_size,
+                min_quality,
+                max_quality,
+                preserve_exif=preserve_exif,
             )
         else:
-            note = "No se pudo alcanzar el objetivo ni con la paleta mínima"
-        return _finalize(output_path, original_bytes, original_size, data, quality, note, im)
+            encode_fn: Callable[..., bytes] = lambda q: _encode(
+                im,
+                fmt,
+                quality=q,
+                jpeg_background=jpeg_background,
+                preserve_exif=preserve_exif,
+            )
 
-    quality, data, reached = _best_effort_encode(
-        lambda q: _encode(im, fmt, q), target_size, min_quality, max_quality
-    )
-    note = None if reached else "No se pudo alcanzar el objetivo ni con la calidad mínima"
-    return _finalize(output_path, original_bytes, original_size, data, quality, note, im)
+            # Atajo: si incluso la calidad mínima no reduce el archivo, no
+            # desperdiciamos el resto de la búsqueda.
+            min_data = encode_fn(min_quality)
+            if len(min_data) >= original_size:
+                return _finalize(
+                    output_path,
+                    input_path,
+                    original_size,
+                    min_data,
+                    min_quality,
+                    "La calidad mínima no produce un archivo menor; se conservó el original",
+                    im,
+                    target_size=target_size,
+                    target_reached=False,
+                    target_ratio=target_ratio,
+                    fmt=fmt,
+                    jpeg_background=jpeg_background,
+                    preserve_exif=preserve_exif,
+                )
+
+            quality, data, reached = _best_effort_encode(
+                encode_fn,
+                target_size,
+                min_quality,
+                max_quality,
+            )
+            note = None if reached else "No se pudo alcanzar el objetivo ni con la calidad mínima"
+
+        return _finalize(
+            output_path,
+            input_path,
+            original_size,
+            data,
+            quality,
+            note,
+            im,
+            target_size=target_size,
+            target_reached=reached,
+            target_ratio=target_ratio,
+            fmt=fmt,
+            jpeg_background=jpeg_background,
+            preserve_exif=preserve_exif,
+        )
+    finally:
+        try:
+            raw_im.close()
+        except Exception:
+            pass

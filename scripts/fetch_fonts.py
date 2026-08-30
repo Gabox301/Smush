@@ -10,6 +10,7 @@ Uso:
 from __future__ import annotations
 
 import re
+from typing import Any
 import urllib.request
 from pathlib import Path
 
@@ -21,28 +22,28 @@ CSS_URL = (
     "&display=swap"
 )
 
-OUT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+OUT_DIR: Path = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 
 # Sin User-Agent de navegador, la API sirve TTF en lugar de WOFF2.
-OPENER = urllib.request.build_opener()
+OPENER: urllib.request.OpenerDirector = urllib.request.build_opener()
 OPENER.addheaders = [("User-Agent", "curl/7.64.1")]
 
 
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    css = OPENER.open(CSS_URL, timeout=30).read().decode("utf-8")
+    css = OPENER.open(fullurl=CSS_URL, timeout=30).read().decode("utf-8")
 
-    blocks = re.findall(r"@font-face\s*\{([^}]+)", css)
+    blocks: list[Any] = re.findall(pattern=r"@font-face\s*\{([^}]+)", string=css)
     # (familia, peso) -> URL; nos quedamos con la última variante de cada
     # uno porque el subset "latin" es el último bloque que aparece.
     found: dict[tuple[str, str], str] = {}
     for block in blocks:
         if "font-style: italic" in block:
             continue
-        fam_m = re.search(r"font-family:\s*'([^']+)'", block)
-        weight_m = re.search(r"font-weight:\s*(\d+)", block)
-        url_m = re.search(r"url\((https://[^)]+\.ttf)\)", block)
+        fam_m: re.Match[str] | None = re.search(pattern=r"font-family:\s*'([^']+)'", string=block)
+        weight_m: re.Match[str] | None = re.search(pattern=r"font-weight:\s*(\d+)", string=block)
+        url_m: re.Match[str] | None = re.search(pattern=r"url\((https://[^)]+\.ttf)\)", string=block)
         if not (fam_m and weight_m and url_m):
             continue
         found[(fam_m.group(1), weight_m.group(1))] = url_m.group(1)
@@ -51,9 +52,9 @@ def main() -> None:
         raise SystemExit("No se encontraron fuentes TTF en la respuesta.")
 
     for (family, weight), url in sorted(found.items()):
-        filename = f"{family.replace(' ', '')}-{weight}.ttf"
-        dest = OUT_DIR / filename
-        data = OPENER.open(url, timeout=60).read()
+        filename: str = f"{family.replace(' ', '')}-{weight}.ttf"
+        dest: Path = OUT_DIR / filename
+        data = OPENER.open(fullurl=url, timeout=60).read()
         dest.write_bytes(data)
         print(f"OK  {filename}  ({len(data) // 1024} KB)")
 
