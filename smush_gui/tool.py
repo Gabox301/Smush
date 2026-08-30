@@ -78,20 +78,16 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
 
     app.config_panel = neo_panel(
         ft.Column(
-            spacing=0,
+            spacing=12,
             controls=[
-                ft.Row(
-                    wrap=True,
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    controls=[
-                        ft.Column(spacing=10, expand=True,
-                                  controls=[label_row, app.slider, hint]),
-                        ft.Container(padding=ft.Padding(0, 6, 0, 0),
-                                     content=app.squeeze_canvas),
-                    ],
+                label_row,
+                app.slider,
+                hint,
+                ft.Container(
+                    alignment=ft.Alignment.CENTER,
+                    padding=ft.Padding(0, 8, 0, 0),
+                    content=app.squeeze_canvas,
                 ),
-                ft.Container(height=22),
                 ft.Row(spacing=12, controls=[app.compress_btn, clear_btn]),
             ],
         ),
@@ -112,10 +108,10 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
             app.dropzone_sub,
         ],
     )
-    # El neo_panel ES el cuadro: 360×360, centrado, sin contenedor exterior ancho
+    # El neo_panel ES el cuadro: compacto (260) para que entren controles sin scrollear
     dropzone = neo_panel(dropzone_content)
-    dropzone.width = 360
-    dropzone.height = 360
+    dropzone.width = 260
+    dropzone.height = 260
     dropzone.alignment = ft.Alignment.CENTER
     dropzone.on_click = app.pick_files
     # Borde inicial suave, hover lo oscurece
@@ -194,12 +190,16 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
         content=mono_text("Las imágenes se procesan en tu máquina y se guardan solo donde elijas."),
     )
 
-    app.main_column = ft.ListView(
-        expand=True,
+    # Column scrolleable necesita altura acotada (docs: height + width + scroll).
+    # Altura = ventana - padding (70+40) para que quepa sin recorte y el slider se vea.
+    _h = getattr(app.page, "height", None) or getattr(app.page.window, "height", 700) or 700
+    _h = max(380, int(_h * 0.85))  # 85% de la ventana, deja ver controles sin scrollear
+    app.main_column = ft.Column(
         spacing=26,
-        padding=ft.Padding(0, 0, 0, 0),
-        build_controls_on_demand=False,
-        clip_behavior=ft.ClipBehavior.NONE,
+        height=_h,
+        width=float("inf"),
+        scroll=ft.ScrollMode.ALWAYS,
+        expand=True,
         controls=[topbar, dropzone_panel, app.config_panel, list_panel,
                   results_panel, footer],
     )

@@ -44,7 +44,7 @@ class SmushApp:
     squeeze_canvas: cv.Canvas
     file_list_col: ft.Column
     result_col: ft.Column
-    main_column: ft.ListView
+    main_column: ft.Column
 
     # Atributos de la landing (asignados por build_landing)
     landing_col: ft.ListView
@@ -109,14 +109,12 @@ class SmushApp:
         self.config_panel.visible = False
         self.list_panel.visible = False
         self.results_panel.visible = False
-        # Altura acotada para ListView dentro de Stack: sin esto el scroll se recorta.
+        # Altura acotada para ListView/Column dentro de Stack: sin esto el scroll se recorta.
         try:
             _h = self.page.height or self.page.window.height or 700
             if _h and _h > 100:
                 self.landing_col.height = _h
-                # main_column está dentro de 2 Containers con padding 40+70, no necesita altura fija
-                # si se le da altura = Stack, overflow; dejamos que expand lo acote.
-                # self.main_column.height = _h
+                self.main_column.height = _h
         except Exception:
             pass
 
@@ -125,6 +123,7 @@ class SmushApp:
                 h = getattr(e, "height", None) or self.page.window.height or self.page.height
                 if h and h > 100:
                     self.landing_col.height = h
+                    self.main_column.height = h
                     self.page.update()
             except Exception:
                 pass

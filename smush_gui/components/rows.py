@@ -41,13 +41,13 @@ def thumb_control(path: Path | str) -> ft.Control:
     thumb_png = make_thumb_png(Path(path))
     if thumb_png:
         return ft.Container(
-            width=42, height=42, bgcolor=SURFACE,
+            width=36, height=36, bgcolor=SURFACE,
             border=ft.Border.all(2, INK), border_radius=8,
             clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-            content=ft.Image(src=thumb_png, width=42, height=42, fit=ft.BoxFit.COVER),
+            content=ft.Image(src=thumb_png, width=36, height=36, fit=ft.BoxFit.COVER),
         )
     return ft.Container(
-        width=42, height=42, bgcolor=SURFACE,
+        width=36, height=36, bgcolor=SURFACE,
         border=ft.Border.all(2, INK), border_radius=8,
         alignment=ft.Alignment.CENTER,
         content=mono_text(ext_of(str(path)).lstrip("."), size=10, color=INK_SOFT),
