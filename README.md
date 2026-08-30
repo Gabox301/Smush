@@ -40,6 +40,27 @@ el slider y guardás cada resultado o todo junto en un ZIP donde quieras.
 Los archivos comprimidos intermedios viven en una carpeta temporal y se
 autolimpian a los 30 minutos.
 
+## Generar el ejecutable (.exe) de escritorio
+
+Empaquetá la UI en un único ejecutable Windows autónomo con
+[`flet pack`](https://flet.dev/docs/publish) (usa PyInstaller por
+debajo).
+
+```bash
+# requiere uv: https://docs.astral.sh/uv/getting-started/installation/
+uv sync --group dev
+
+# descargar las fuentes si aún no lo hiciste (assets/fonts/)
+uv run python scripts/fetch_fonts.py
+
+# empaquetar en dist/Smush.exe (incluye la carpeta assets: logo y fuentes)
+uv run flet pack flet_app.py --name Smush --icon "assets/img/favicon.ico" --add-data "assets;assets" -y
+```
+
+El binario resulta en `dist/Smush.exe` y no necesita Python instalado para
+ejecutarse. En Linux/macOS cambiá el separador de `--add-data` por `:` en
+lugar de `;`.
+
 ## API REST (FastAPI)
 
 El backend expone además una API REST para integrar la compresión desde
