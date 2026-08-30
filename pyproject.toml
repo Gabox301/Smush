@@ -1,6 +1,6 @@
 [project]
 name = "smush"
-version = "0.1.0"
+version = "1.0.0"
 description = "Compresor de imágenes AVIF, WEBP, JPEG y PNG a porcentaje objetivo manteniendo dimensiones"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -10,13 +10,14 @@ dependencies = [
     "python-multipart>=0.0.32",
     "Pillow==12.3.0",
     "flet[desktop]>=0.86.5",
+    "numpy>=2.5.2",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3.0",
-    "httpx>=0.28.0",
-    "pytest-asyncio>=0.24.0",
+    "pytest>=9.1.1",
+    "httpx>=0.28.1",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [build-system]
