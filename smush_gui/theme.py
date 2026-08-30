@@ -78,8 +78,11 @@ def neo_button(
     )
 
     def handle_hover(e: ft.Event) -> None:
-        btn.scale = 1.04 if e.data else 1.0
-        btn.update()
+        btn.scale = 1.04 if e.data == "true" else 1.0
+        try:
+            btn.update()
+        except RuntimeError:
+            pass
 
     btn.on_hover = handle_hover
     return btn

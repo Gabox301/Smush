@@ -82,14 +82,17 @@ def with_hover(card: ft.Container) -> ft.Container:
     card.animate_scale = ft.Animation(duration=180, curve=ft.AnimationCurve.EASE_OUT_BACK)
 
     def handle_hover(e: ft.Event) -> None:
-        hovered = bool(e.data)
+        hovered = e.data == "true"
         card.scale = 1.03 if hovered else 1.0
         card.shadow = ft.BoxShadow(
             offset=ft.Offset(10, 10) if hovered else ft.Offset(6, 6),
             blur_radius=0,
             color=INK,
         )
-        card.update()
+        try:
+            card.update()
+        except RuntimeError:
+            pass
 
     card.on_hover = handle_hover
     return card
@@ -109,9 +112,12 @@ def nav_link(app, label: str, target_key: str) -> ft.Container:  # noqa: ANN001
     )
 
     def handle_hover(e: ft.Event) -> None:
-        link.border = ft.Border.only(bottom=ft.BorderSide(width=3 if e.data else 0, color=CORAL))
+        link.border = ft.Border.only(bottom=ft.BorderSide(width=3 if e.data == "true" else 0, color=CORAL))
         link.padding = ft.Padding(left=0, top=0, right=0, bottom=4)
-        link.update()
+        try:
+            link.update()
+        except RuntimeError:
+            pass
 
     link.on_hover = handle_hover
     return link
