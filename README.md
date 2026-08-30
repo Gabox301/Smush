@@ -1,9 +1,10 @@
 # Smush — compresor de imágenes
 
-Aplicación web para comprimir imágenes AVIF, WEBP, JPEG y PNG a un
+Aplicación para comprimir imágenes AVIF, WEBP, JPEG y PNG a un
 porcentaje objetivo del tamaño original, manteniendo siempre las
-dimensiones. Backend en FastAPI, frontend propio (HTML/CSS/JS, sin
-frameworks), lista para correr local o desplegarse como servicio.
+dimensiones. Backend en FastAPI y UI 100% en Python con Flet
+(escritorio, navegador y móvil), lista para correr local o
+desplegarse como servicio.
 
 ## Cómo funciona
 
@@ -13,31 +14,24 @@ igual o menor al % de tamaño pedido. Así se pierde la menor calidad
 visual posible para llegar al peso objetivo. Las dimensiones nunca
 se tocan.
 
-## Correr en local
+## Correr en local (UI Flet)
+
+La interfaz está construida íntegramente en Python con
+[Flet](https://flet.dev): no hay HTML/CSS/JS. Por ser Flet, la misma UI
+corre en escritorio (Windows/macOS/Linux), en el navegador y en móvil,
+y llama directo a `compressor_core.compress_to_target`.
 
 ```bash
 # requiere uv: https://docs.astral.sh/uv/getting-started/installation/
 uv sync
-uv run python app.py
-```
 
-Abrí `http://localhost:5000` en el navegador. También disponible la doc automática en `http://localhost:5000/docs`.
-
-## Interfaz nativa multiplataforma (UI 100% Python con Flet)
-
-La misma interfaz, replicando el diseño web, pero construida íntegramente
-en Python con [Flet](https://flet.dev). Sin HTML: los controles llaman
-directo a `compressor_core.compress_to_target`. Al ser Flet, corre en
-escritorio (Windows/macOS/Linux), en el navegador y en móvil.
-
-```bash
 # 1) descargar las fuentes de marca (solo la primera vez)
 uv run python scripts/fetch_fonts.py
 
 # 2) correr la app (escritorio)
 uv run python flet_app.py
 
-# 3) correr en el navegador
+# 3) o correrla en el navegador
 uv run flet run --web flet_app.py
 ```
 
@@ -46,7 +40,22 @@ el slider y guardás cada resultado o todo junto en un ZIP donde quieras.
 Los archivos comprimidos intermedios viven en una carpeta temporal y se
 autolimpian a los 30 minutos.
 
-## Correr en local con Uvicorn (modo "producción")
+## API REST (FastAPI)
+
+El backend expone además una API REST para integrar la compresión desde
+otros servicios. Para correrla en local:
+
+```bash
+uv sync
+uv run python app.py
+```
+
+Queda escuchando en `http://localhost:5000`, con la doc automática
+(Swagger) en `http://localhost:5000/docs`. Endpoints principales:
+`POST /api/compress`, `GET /api/download/{job_id}/{filename}` y
+`GET /api/download-zip/{job_id}`.
+
+### Modo "producción" con Uvicorn
 
 ```bash
 uv sync --frozen
@@ -72,11 +81,9 @@ uv run uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2
 
 ```bash
 uv sync --group dev
-uv run pytest -v          # 49 tests, ~4s
-uv run pytest --cov       # con coverage si agregás pytest-cov
+uv run pytest -v
+uv run pytest --cov       # cobertura (pytest-cov incluido en dev)
 ```
-
-Cobertura actual: `compressor_core.py` (format, quality, PNG lossless, WEBP/AVIF, errores) y `app.py` (health, compress, validaciones ratio, formatos, colisión de nombres, límite 60MB, download/zip, 404). Ver `tests/` para detalles.
 
 ## Estructura del proyecto
 
@@ -97,8 +104,8 @@ assets/                 # recursos de marca y UI Flet
 tests/
   test_compressor_core.py
   test_app.py
+  test_helpers.py
   conftest.py
 pyproject.toml          # dependencias (uv)
 uv.lock                 # lockfile reproducible
-Dockerfile
 ```
