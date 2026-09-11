@@ -29,6 +29,13 @@ FONT_MONO = "PlexMono"
 ACCEPTED: list[str] = [".avif", ".webp", ".jpg", ".jpeg", ".png"]
 
 
+def is_hovered(data: object) -> bool:
+    """Normaliza e.data de on_hover: bool en Flet 0.86+, "true" en versiones viejas."""
+    if isinstance(data, str):
+        return data.lower() == "true"
+    return bool(data)
+
+
 def mono_text(
     value,
     size: float = 12,
@@ -78,7 +85,7 @@ def neo_button(
     )
 
     def handle_hover(e: ft.Event) -> None:
-        btn.scale = 1.04 if e.data == "true" else 1.0
+        btn.scale = 1.04 if is_hovered(data=e.data) else 1.0
         try:
             btn.update()
         except RuntimeError:

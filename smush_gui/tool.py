@@ -22,6 +22,7 @@ from .theme import (
     LIME_DARK,
     SURFACE,
     SURFACE_ALT,
+    is_hovered,
     mono_text,
     neo_button,
     neo_panel,
@@ -119,7 +120,7 @@ def build_tool(app) -> ft.Control:  # noqa: ANN001
     dropzone.border = ft.Border.all(width=BW, color=INK_SOFT)
 
     def handle_hover(e: ft.Event) -> None:
-        hovered = bool(e.data)
+        hovered: bool = is_hovered(data=e.data)
         dropzone.border = ft.Border.all(width=BW, color=LIME_DARK if hovered else INK_SOFT)
         new_color: Literal['#17170f'] | Literal['#5a5847'] = INK if hovered else INK_SOFT
         app.dropzone_icon.color = new_color
