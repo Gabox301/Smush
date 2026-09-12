@@ -14,6 +14,10 @@ igual o menor al % de tamaño pedido. Así se pierde la menor calidad
 visual posible para llegar al peso objetivo. Las dimensiones nunca
 se tocan.
 
+La herramienta también convierte entre formatos (AVIF, WEBP, JPEG, PNG):
+además de cambiar el formato, comprime buscando la mejor calidad que
+entre en el peso máximo elegido (100% = que no pese más que el original).
+
 ## Correr en local (UI Flet)
 
 La interfaz está construida íntegramente en Python con
@@ -68,7 +72,7 @@ otros servicios. Para correrla en local:
 
 ```bash
 uv sync
-uv run python app.py
+uv run python api.py
 ```
 
 Queda escuchando en `http://localhost:5000`, con la doc automática
@@ -80,7 +84,7 @@ Queda escuchando en `http://localhost:5000`, con la doc automática
 
 ```bash
 uv sync --frozen
-uv run uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2
+uv run uvicorn api:app --host 0.0.0.0 --port 8000 --workers 2
 ```
 
 ## Notas de producción
@@ -111,22 +115,39 @@ uv run pytest --cov       # cobertura (pytest-cov incluido en dev)
 ```
 flet_app.py             # punto de entrada de la UI Flet (multiplataforma)
 smush_gui/              # interfaz Flet modular:
-  app.py                #   controlador (navegación, compresión, guardado)
+  app.py                #   controlador (navegación, compresión, conversión, guardado)
   theme.py              #   tokens de diseño y componentes base
   landing.py            #   vista de landing
-  tool.py               #   vista de la herramienta
+  tool.py               #   vista de la herramienta (compresión + conversión)
+  components/           #   primitivas UI (botones, cards, filas)
   helpers.py            #   assets, fuentes, miniaturas, utilidades
-app.py                  # API REST FastAPI (/api/compress, /api/download/...)
+api.py                  # API REST FastAPI (/api/compress, /api/download/...)
 scripts/fetch_fonts.py  # descarga las fuentes TTF a assets/fonts/
-compressor_core.py      # lógica de compresión (búsqueda binaria de calidad)
+compressor_core/      # compresión (búsqueda binaria) y conversión:
+  formats.py          #   constantes, formatos, validación
+  metadata.py         #   TypedDicts de resultados y guards
+  image_ops.py        #   operaciones Pillow (alfa, EXIF/ICC)
+  encode.py           #   codificadores por formato
+  search.py           #   búsqueda de calidad/paleta
+  quality.py          #   PSNR con numpy opcional
+  pipeline.py         #   compress_to_target, convert_format
 assets/                 # recursos de marca y UI Flet
   img/                  #   isotipos, favicon, apple-touch-icon
   fonts/                #   TTF de marca (descargados)
 tests/
   test_compressor_core.py
   test_app.py
+  test_smush_gui.py
+  test_components.py
+  test_theme.py
   test_helpers.py
   conftest.py
-pyproject.toml          # dependencias (uv)
+pyproject.toml          # dependencias (uv) + config de ruff
 uv.lock                 # lockfile reproducible
+```
+
+## Lint
+
+```bash
+uvx ruff check .       # lint (reglas en [tool.ruff.lint] de pyproject.toml)
 ```

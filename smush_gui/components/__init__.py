@@ -12,11 +12,21 @@ from .primitives import (
     with_cols,
     with_hover,
 )
-from .rows import brand_icon, error_row, meta_column, pending_row, result_row, row_shell, thumb_control
+from .rows import (
+    brand_icon,
+    convert_result_row,
+    error_row,
+    meta_column,
+    pending_row,
+    result_row,
+    row_shell,
+    thumb_control,
+)
 
-__all__ = [
+__all__: list[str] = [
     "brand_icon",
     "chip",
+    "convert_result_row",
     "error_row",
     "feature_card",
     "format_badge",

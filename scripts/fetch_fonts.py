@@ -10,9 +10,9 @@ Uso:
 from __future__ import annotations
 
 import re
-from typing import Any
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 CSS_URL = (
     "https://fonts.googleapis.com/css2"

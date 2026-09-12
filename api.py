@@ -27,10 +27,16 @@ from compressor_core import (
     UnsupportedFormatError,
     compress_to_target,
 )
+from compressor_core.metadata import CompressMeta
 
 app = FastAPI(title="Smush — compresor de imágenes (API)")
 
 MAX_CONTENT_LENGTH = 60 * 1024 * 1024  # 60 MB por request
+
+# El core acepta (0, 1]; la API es más estricta a propósito: fuera de este
+# rango el resultado no tiene sentido como "compresión".
+RATIO_MIN = 0.05
+RATIO_MAX = 0.95
 
 BASE_TMP: Path = Path(tempfile.gettempdir()) / "image-compressor-jobs"
 BASE_TMP.mkdir(parents=True, exist_ok=True)
@@ -51,7 +57,7 @@ def _cleanup_old_jobs() -> None:
 @app.post(path="/api/compress")
 async def api_compress(
     request: Request,
-    images: list[UploadFile] = File(default=[]),
+    images: list[UploadFile] = File(default_factory=list),  # noqa: B008 — patrón documentado de FastAPI
     ratio: str = Form(default="0.5"),
 ) -> JSONResponse:
     # Límite de tamaño similar a Flask MAX_CONTENT_LENGTH
@@ -76,9 +82,10 @@ async def api_compress(
     except ValueError:
         return JSONResponse(content={"error": "Ratio inválido."}, status_code=400)
 
-    if not (0.05 <= ratio_val <= 0.95):
+    if not (RATIO_MIN <= ratio_val <= RATIO_MAX):
         return JSONResponse(
-            content={"error": "El ratio debe estar entre 5% y 95%."}, status_code=400
+            content={"error": f"El ratio debe estar entre {RATIO_MIN * 100:.0f}% y {RATIO_MAX * 100:.0f}%."},
+            status_code=400,
         )
 
     job_id: str = uuid.uuid4().hex
@@ -129,10 +136,10 @@ async def api_compress(
             continue
 
         try:
-            meta = await run_in_threadpool(
+            meta: CompressMeta = await run_in_threadpool(
                 compress_to_target, in_path, out_path, ratio_val
             )
-            pct = round(number=meta["new_size"] / meta["original_size"] * 100, ndigits=1)
+            pct: float = round(number=meta["new_size"] / meta["original_size"] * 100, ndigits=1)
             results.append(
                 {
                     "filename": original_name,
@@ -205,7 +212,8 @@ async def json_version() -> dict[str, str]:
         from importlib.metadata import version as pkg_version
 
         ver: str = pkg_version(distribution_name="smush")
-    except Exception:
+    except Exception:  # noqa: BLE001
+        # Sin metadata instalada (checkout sin pip install): versión dummy.
         ver = "0.1.0"
     return {"version": ver}
 
@@ -213,4 +221,4 @@ async def json_version() -> dict[str, str]:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app="app:app", host="127.0.0.1", port=5000, reload=True)
+    uvicorn.run(app="api:app", host="127.0.0.1", port=5000, reload=True)

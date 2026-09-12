@@ -8,9 +8,21 @@ from pathlib import Path
 
 import flet as ft
 
+from compressor_core import CompressRow, ConvertRow
+
 from ..helpers import ext_of, make_thumb_png
-from ..theme import CORAL, INK, INK_SOFT, SURFACE, SURFACE_ALT, FONT_MONO, mono_text, neo_button
-from ..theme import BLUE, LIME  # para badge
+from ..theme import (  # para badge
+    BLUE,
+    CORAL,
+    FONT_MONO,
+    INK,
+    INK_SOFT,
+    LIME,
+    SURFACE,
+    SURFACE_ALT,
+    mono_text,
+    neo_button,
+)
 
 
 def row_shell(i: int, controls: list[ft.Control]) -> ft.Container:
@@ -64,7 +76,7 @@ def brand_icon(size: int) -> ft.Control:
 
 
 # ---- Filas de alto nivel (reutilizables) ----
-def result_row(app, i: int, r: dict) -> ft.Container:  # noqa: ANN001
+def result_row(app, i: int, r: CompressRow) -> ft.Container:  # noqa: ANN001
     from ..helpers import human_size
 
     badge = ft.Container(
@@ -96,7 +108,7 @@ def result_row(app, i: int, r: dict) -> ft.Container:  # noqa: ANN001
         meta_column(name=r["filename"], sub=ft.Column(spacing=0, controls=[sizes, note])),
         badge,
     ]
-    psnr = r.get("psnr_db")
+    psnr: float | None = r.get("psnr_db")
     if psnr is not None:
         low_quality: bool = not r.get("quality_acceptable", True)
         controls.append(
@@ -126,6 +138,41 @@ def error_row(i: int, filename: str, error: str) -> ft.Container:
         controls=[ft.Icon(icon=ft.Icons.ERROR_OUTLINE, size=22, color=CORAL),
          meta_column(name=filename,
                       sub=ft.Text(value=error, size=13, weight=ft.FontWeight.W_600, color=CORAL))],
+    )
+
+
+def convert_result_row(app, i: int, r: ConvertRow) -> ft.Container:  # noqa: ANN001
+    """Fila de un archivo convertido: badge del formato destino + guardar."""
+    from ..helpers import human_size
+
+    badge = ft.Container(
+        bgcolor=LIME,
+        border=ft.Border.all(width=2, color=INK),
+        border_radius=20,
+        padding=ft.Padding(left=10, top=4, right=10, bottom=4),
+        content=mono_text(value=f".{r['target_format'].lower()}", size=12.5, color=INK,
+                          weight=ft.FontWeight.W_700),
+    )
+    sizes = ft.Text(
+        spans=[
+            ft.TextSpan(text=human_size(num_bytes=r["original_size"])),
+            ft.TextSpan(text=" → "),
+            ft.TextSpan(text=human_size(num_bytes=r["new_size"]),
+                        style=ft.TextStyle(weight=ft.FontWeight.W_700, color=INK)),
+        ],
+        size=12,
+        color=INK_SOFT,
+        font_family=FONT_MONO or None,
+    )
+    detail: str = f"calidad {r['quality']}" if r.get("quality") else "sin pérdida"
+    if r.get("note"):
+        detail = f"{detail} — {r['note']}"
+    save_btn: ft.Container = neo_button(label="Guardar", bgcolor=BLUE, color="#fdfcf6", border_width=2, shadow_offset=(2, 2))
+    save_btn.on_click = app.make_save_handler(r)
+    return row_shell(
+        i,
+        controls=[meta_column(name=r["filename"], sub=ft.Column(spacing=0, controls=[sizes, mono_text(value=detail, size=11)])),
+         badge, save_btn],
     )
 
 

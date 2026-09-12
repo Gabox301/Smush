@@ -1,12 +1,14 @@
 """Tests de smush_gui/components: cards, primitives y rows."""
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 import flet as ft
 import pytest
 from PIL import Image
 
+from compressor_core import CompressRow
 from smush_gui import helpers
 from smush_gui.components import cards as cards_mod
 from smush_gui.components import primitives as prim
@@ -83,6 +85,7 @@ def test_sticker() -> None:
     assert out.left == 14
     assert out.top == 27
     assert out.rotate is not None
+    assert isinstance(out.rotate, ft.Rotate)
     assert out.rotate.angle == -0.105
     assert isinstance(out.content, ft.Text)
     assert out.content.value == ".png"
@@ -103,9 +106,11 @@ def test_with_hover_changes_scale_and_shadow() -> None:
     fire(card.on_hover, SimpleNamespace(data="true"))
     assert card.scale == 1.03
     assert card.shadow is not None
+    assert isinstance(card.shadow, ft.BoxShadow)
     assert card.shadow.offset == ft.Offset(10, 10)
     fire(card.on_hover, SimpleNamespace(data="false"))
     assert card.scale == 1.0
+    assert isinstance(card.shadow, ft.BoxShadow)
     assert card.shadow.offset == ft.Offset(6, 6)
 
 
@@ -124,7 +129,7 @@ def test_nav_link_click_scrolls_and_hover() -> None:
             self.calls: list[tuple] = []
             self.page = SimpleNamespace(run_task=self._run_task)
 
-        def _run_task(self, fn, *args, **kwargs) -> None:
+        def _run_task(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
             self.calls.append((fn, args, kwargs))
 
         async def scroll_landing(self, key: str) -> None:
@@ -181,8 +186,10 @@ def test_row_shell_rotates_by_parity() -> None:
     assert even.bgcolor == SURFACE_ALT
     assert even.border is not None
     assert even.rotate is not None
+    assert isinstance(even.rotate, ft.Rotate)
     assert even.rotate.angle == -0.007
     assert odd.rotate is not None
+    assert isinstance(odd.rotate, ft.Rotate)
     assert odd.rotate.angle == 0.007
     assert isinstance(even.content, ft.Row)
     assert len(even.content.controls) == 1
@@ -230,13 +237,16 @@ def test_brand_icon_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 def test_result_row_badge_and_note() -> None:
     app = SimpleNamespace(make_save_handler=lambda r: (lambda _e: None))
-    r = {
+    r: CompressRow = {
         "filename": "f.jpg",
         "percent_of_original": 50.0,
         "original_size": 1000,
         "new_size": 500,
         "quality": 50,
         "note": None,
+        "tmp_path": "x",
+        "psnr_db": None,
+        "quality_acceptable": True,
     }
     row: ft.Container = rows_mod.result_row(app, 0, r)
     vals: list[str] = text_values(c=row)
@@ -248,26 +258,30 @@ def test_result_row_shows_psnr_chip() -> None:
     from smush_gui.theme import CORAL, INK_SOFT
 
     app = SimpleNamespace(make_save_handler=lambda r: (lambda _e: None))
-    base = {
-        "filename": "f.jpg",
-        "percent_of_original": 50.0,
-        "original_size": 1000,
-        "new_size": 500,
-        "quality": 50,
-        "note": None,
-    }
+
+    def make_row(psnr: float | None, acceptable: bool, note: str | None) -> CompressRow:
+        return {
+            "filename": "f.jpg",
+            "percent_of_original": 50.0,
+            "original_size": 1000,
+            "new_size": 500,
+            "quality": 50,
+            "note": note,
+            "tmp_path": "x",
+            "psnr_db": psnr,
+            "quality_acceptable": acceptable,
+        }
+
     # Sin psnr no hay chip
-    row: ft.Container = rows_mod.result_row(app, 0, dict(base))
+    row: ft.Container = rows_mod.result_row(app, 0, make_row(None, True, None))
     assert "dB" not in " ".join(text_values(c=row))
 
     # Con psnr bueno: chip visible, colores normales
-    ok = dict(base, psnr_db=45.12, quality_acceptable=True)
-    row_ok: ft.Container = rows_mod.result_row(app, 0, ok)
+    row_ok: ft.Container = rows_mod.result_row(app, 0, make_row(45.12, True, None))
     assert "45.1 dB" in text_values(c=row_ok)
 
     # Con calidad baja: chip + nota en coral
-    bad = dict(base, psnr_db=24.33, quality_acceptable=False, note="aviso de piso")
-    row_bad: ft.Container = rows_mod.result_row(app, 0, bad)
+    row_bad: ft.Container = rows_mod.result_row(app, 0, make_row(24.33, False, "aviso de piso"))
     assert "24.3 dB" in text_values(c=row_bad)
 
     def all_texts(c: Any) -> list[ft.Text]:
@@ -276,14 +290,14 @@ def test_result_row_shows_psnr_chip() -> None:
             found.append(c)
         for sub in list(getattr(c, "controls", None) or []):
             found += all_texts(sub)
-        content = getattr(c, "content", None)
+        content: Any | None = getattr(c, "content", None)
         if content is not None:
             found += all_texts(content)
         return found
 
-    bad_texts = {t.value: t.color for t in all_texts(row_bad)}
+    bad_texts: dict[str, str | ft.Colors | ft.CupertinoColors | None] = {t.value: t.color for t in all_texts(row_bad)}
     assert bad_texts.get("24.3 dB") == CORAL
-    ok_texts = {t.value: t.color for t in all_texts(row_ok)}
+    ok_texts: dict[str, str | ft.Colors | ft.CupertinoColors | None] = {t.value: t.color for t in all_texts(row_ok)}
     assert ok_texts.get("45.1 dB") != CORAL
     assert INK_SOFT not in {t.color for t in all_texts(row_bad) if t.value and t.value.startswith("calidad")}
 
@@ -306,5 +320,6 @@ def test_pending_row_remove_callback(tmp_path: Path) -> None:
     row: ft.Container = rows_mod.pending_row(0, p, remove_cb)
     assert isinstance(row.content, ft.Row)
     remove_btn: ft.Control = row.content.controls[2]
+    assert isinstance(remove_btn, ft.Container)
     fire(remove_btn.on_click, None)
     assert removed == [0]

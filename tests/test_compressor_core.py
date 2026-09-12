@@ -1,7 +1,7 @@
 import io
 import random
 from pathlib import Path
-from typing import Literal, NoReturn
+from typing import Any, Callable, Literal, NoReturn
 
 import pytest
 from PIL import Image
@@ -10,6 +10,7 @@ import compressor_core as cc
 from compressor_core import (
     EXTENSION_TO_FORMAT,
     SUPPORTED_EXTENSIONS,
+    TARGET_FORMATS,
     UnsupportedFormatError,
     _best_effort_encode,
     _binary_search_quality,
@@ -21,14 +22,14 @@ from compressor_core import (
     _quantize_for_png,
     _save_with_optional_metadata,
     compress_to_target,
+    convert_format,
     format_for_extension,
 )
-
 
 # Helpers
 
 
-def make_noisy_image(path: Path, size=(600, 600), fmt="JPEG") -> Image.Image:
+def make_noisy_image(path: Path, size: tuple[int, int] = (600, 600), fmt: str = "JPEG") -> Image.Image:
     """Crea imagen con ruido para que la compresión tenga efecto medible."""
     w, h = size
     img: Image.Image = Image.new(mode="RGB", size=(w, h))
@@ -38,7 +39,7 @@ def make_noisy_image(path: Path, size=(600, 600), fmt="JPEG") -> Image.Image:
     return img
 
 
-def make_solid_image(path: Path, size=(100, 100), color="red", fmt="JPEG", **save_kwargs) -> Image.Image:
+def make_solid_image(path: Path, size: tuple[int, int] = (100, 100), color: str = "red", fmt: str = "JPEG", **save_kwargs: Any) -> Image.Image:
     img: Image.Image = Image.new("RGB", size, color=color)
     img.save(fp=path, format=fmt, quality=95, **save_kwargs)
     return img
@@ -92,12 +93,13 @@ def test_compress_jpeg_reduces_to_target(tmp_path: Path) -> None:
     make_noisy_image(path=src, size=(800, 800), fmt="JPEG")
     original: int = src.stat().st_size
     target_ratio = 0.5
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=target_ratio)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=target_ratio)
     assert dst.exists()
     assert meta["original_size"] == original
     assert meta["new_size"] <= original * target_ratio + 500  # tolerancia por búsqueda binaria
+    assert meta["quality"] is not None
     assert 10 <= meta["quality"] <= 95
-    assert meta["width"] == 800 and meta["height"] == 600 or meta["width"] == 800  # noisy 800x800
+    assert (meta["width"] == 800 and meta["height"] == 600) or meta["width"] == 800  # noisy 800x800
     # Piso de calidad: si el PSNR quedó bajo el mínimo, el note trae el aviso en vez de None.
     if meta["quality_acceptable"]:
         assert meta["note"] is None
@@ -112,7 +114,7 @@ def test_compute_psnr_false_skips_psnr(tmp_path: Path) -> None:
     src: Path = tmp_path / "src.jpg"
     dst: Path = tmp_path / "dst.jpg"
     make_noisy_image(path=src, size=(800, 800), fmt="JPEG")
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5, compute_psnr=False)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5, compute_psnr=False)
     assert dst.exists()
     assert meta["psnr_db"] is None
     assert meta["quality_acceptable"] is True
@@ -123,7 +125,7 @@ def test_min_psnr_db_zero_reports_value_without_warning(tmp_path: Path) -> None:
     src: Path = tmp_path / "src.jpg"
     dst: Path = tmp_path / "dst.jpg"
     make_noisy_image(path=src, size=(800, 800), fmt="JPEG")
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5, min_psnr_db=0.0)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5, min_psnr_db=0.0)
     assert dst.exists()
     assert meta["psnr_db"] is not None
     assert meta["quality_acceptable"] is True
@@ -134,7 +136,7 @@ def test_min_psnr_db_strict_triggers_warning(tmp_path: Path) -> None:
     src: Path = tmp_path / "src.jpg"
     dst: Path = tmp_path / "dst.jpg"
     make_noisy_image(path=src, size=(800, 800), fmt="JPEG")
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5, min_psnr_db=99.0)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5, min_psnr_db=99.0)
     assert dst.exists()
     assert meta["quality_acceptable"] is False
     assert meta["note"] is not None and "99.0" in meta["note"]
@@ -152,7 +154,7 @@ def test_compress_jpeg_maintains_dimensions(tmp_path: Path) -> None:
     src: Path = tmp_path / "a.jpg"
     dst: Path = tmp_path / "b.jpg"
     make_solid_image(path=src, size=(123, 77), fmt="JPEG")
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.7)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.7)
     assert meta["width"] == 123
     assert meta["height"] == 77
     with Image.open(fp=dst) as im:
@@ -188,7 +190,7 @@ def test_compress_jpeg_rgba_converts_to_rgb(tmp_path: Path) -> None:
     dst_rgba: Path = tmp_path / "dst_rgba.png"
     img2: Image.Image = Image.new(mode="RGBA", size=(30, 30), color=(0, 255, 0, 128))
     img2.save(fp=src_rgba, format="PNG")
-    meta = compress_to_target(input_path=src_rgba, output_path=dst_rgba, target_ratio=0.8)
+    meta: cc.CompressMeta = compress_to_target(input_path=src_rgba, output_path=dst_rgba, target_ratio=0.8)
     assert dst_rgba.exists()
     assert meta["width"] == 30 and meta["height"] == 30
 
@@ -198,10 +200,11 @@ def test_compress_png_lossless_note(tmp_path: Path) -> None:
     dst: Path = tmp_path / "out.png"
     img: Image.Image = Image.new(mode="RGBA", size=(100, 100), color=(255, 0, 0, 128))
     img.save(fp=src, format="PNG")
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5)
     # Código refactorizado: 100x100 RGBA sólido a 50% no alcanza ni con paleta mínima (172 > 157 target),
     # retorna paleta mínima con nota de fallo. Antes se esperaba lossless con quality None y frase distinta.
     assert meta["quality"] == 10
+    assert meta["note"] is not None
     assert "paleta mínima" in meta["note"]
     assert dst.exists()
     assert meta["width"] == 100 and meta["height"] == 100
@@ -212,9 +215,10 @@ def test_compress_png_lossless_note(tmp_path: Path) -> None:
     src2: Path = tmp_path / "img2.png"
     dst2: Path = tmp_path / "out2.png"
     img.save(fp=src2, format="PNG")
-    meta2 = compress_to_target(input_path=src2, output_path=dst2, target_ratio=0.9)
+    meta2: cc.CompressMeta = compress_to_target(input_path=src2, output_path=dst2, target_ratio=0.9)
     # Con 0.9 el target es 283 bytes (315*0.9), el PNG optimizado 221 sí entra, por lo que usa lossless
     assert meta2["quality"] == 100
+    assert meta2["note"] is not None
     assert "PNG optimizado sin pérdida" in meta2["note"]
 
 
@@ -222,7 +226,8 @@ def test_compress_webp(tmp_path: Path) -> None:
     src: Path = tmp_path / "in.webp"
     dst: Path = tmp_path / "out.webp"
     make_noisy_image(path=src, size=(400, 400), fmt="WEBP")
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.6)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.6)
+    assert meta["quality"] is not None
     assert 10 <= meta["quality"] <= 95
     assert dst.exists()
     with Image.open(fp=dst) as im:
@@ -235,12 +240,13 @@ def test_compress_avif_if_supported(tmp_path: Path) -> None:
     dst: Path = tmp_path / "out.avif"
     try:
         make_noisy_image(path=src, size=(200, 200), fmt="AVIF")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         pytest.skip(reason=f"AVIF no soportado en esta build de Pillow: {e}")
     try:
-        meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.6)
-    except Exception as e:
+        meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.6)
+    except Exception as e:  # noqa: BLE001
         pytest.skip(reason=f"AVIF compress falló (plugin faltante): {e}")
+    assert meta["quality"] is not None
     assert 10 <= meta["quality"] <= 95
 
 
@@ -248,7 +254,8 @@ def test_compress_quality_bounds_respected(tmp_path: Path) -> None:
     src: Path = tmp_path / "src.jpg"
     dst: Path = tmp_path / "dst.jpg"
     make_noisy_image(path=src, size=(500, 500), fmt="JPEG")
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.3, min_quality=20, max_quality=80)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.3, min_quality=20, max_quality=80)
+    assert meta["quality"] is not None
     assert 20 <= meta["quality"] <= 80
 
 
@@ -271,9 +278,8 @@ def test_compress_small_image_fallback_to_min_quality(tmp_path: Path) -> None:
     src: Path = tmp_path / "tiny.jpg"
     dst: Path = tmp_path / "out.jpg"
     make_solid_image(path=src, size=(10, 10), fmt="JPEG")
-    original: int = src.stat().st_size
     # Pedir 5% de una imagen ya mínima: probablemente no se alcanza, debe caer a min_quality
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.05)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.05)
     assert meta["quality"] == 10
     assert dst.exists()
 
@@ -338,11 +344,12 @@ def test_target_ratio_one_preserves_original(tmp_path: Path) -> None:
     src: Path = tmp_path / "a.jpg"
     make_solid_image(path=src, size=(300, 300))
     dst: Path = tmp_path / "o.jpg"
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=1.0)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=1.0)
     assert meta["compression_applied"] is False
     assert meta["target_reached"] is True
     assert meta["new_size"] == meta["original_size"]
     assert meta["quality"] is None
+    assert meta["note"] is not None
     assert "no exige reducir" in meta["note"]
     assert dst.read_bytes() == src.read_bytes()
 
@@ -352,9 +359,10 @@ def test_compress_png_quantized_success(tmp_path: Path) -> None:
     src: Path = tmp_path / "noisy.png"
     make_noisy_image(path=src, size=(400, 400), fmt="PNG")
     dst: Path = tmp_path / "out.png"
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.3)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.3)
     assert meta["compression_applied"] is True
     assert meta["target_reached"] is True
+    assert meta["note"] is not None
     assert "PNG cuantizado a" in meta["note"]
     assert dst.exists()
 
@@ -365,14 +373,15 @@ def test_min_quality_shortcut_preserves_original(tmp_path: Path, monkeypatch: py
     make_solid_image(path=src)
     original_size: int = src.stat().st_size
 
-    def fake_encode(*args, **kwargs) -> bytes:
+    def fake_encode(*args: Any, **kwargs: Any) -> bytes:
         return b"\x00" * (original_size + 128)
 
     monkeypatch.setattr(target=cc, name="_encode", value=fake_encode)
     dst: Path = tmp_path / "o.jpg"
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5)
     assert meta["compression_applied"] is False
     assert meta["quality"] is None
+    assert meta["note"] is not None
     assert "resultado no era más pequeño" in meta["note"]
     assert dst.read_bytes() == src.read_bytes()
 
@@ -411,7 +420,7 @@ def test_compress_jpeg_preserves_icc_profile(tmp_path: Path) -> None:
     src: Path = tmp_path / "icc.jpg"
     img: Image.Image = Image.new(mode="RGB", size=(100, 100), color="blue")
     img.save(fp=src, format="JPEG", quality=92, icc_profile=bytes(range(256)) * 4)
-    meta = compress_to_target(input_path=src, output_path=tmp_path / "o.jpg", target_ratio=0.7)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=tmp_path / "o.jpg", target_ratio=0.7)
     assert meta["icc_preserved"] is True
 
 
@@ -422,13 +431,13 @@ def test_compress_preserves_exif_and_resets_orientation(tmp_path: Path) -> None:
     ex[274] = 6
     img.save(fp=src, format="JPEG", quality=92, exif=ex.tobytes())
     dst: Path = tmp_path / "o.jpg"
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.7, preserve_exif=True)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.7, preserve_exif=True)
     assert meta["preserve_exif"] is True
     assert dst.exists()
     # el EXIF original debe seguir en el archivo resultante con Orientation = 1
     with Image.open(fp=dst) as out:
         out.load()
-        exif = out.getexif()
+        exif: Image.Exif = out.getexif()
         assert exif.get(274) in (1, None)  # 1 = ya aplicada físicamente
 
 
@@ -462,10 +471,10 @@ def test_quantize_for_png_converts_non_rgb_and_falls_back(monkeypatch: pytest.Mo
     assert q.mode == "P"
 
     im_rgb: Image.Image = Image.new(mode="RGB", size=(40, 40), color="red")
-    original_quantize = Image.Image.quantize
-    calls = {"n": 0}
+    original_quantize: Callable[..., Image.Image] = Image.Image.quantize
+    calls: dict[str, int] = {"n": 0}
 
-    def raiser(self, *args, **kwargs) -> Image.Image:
+    def raiser(self: Image.Image, *args: Any, **kwargs: Any) -> Image.Image:
         if calls["n"] == 0:
             calls["n"] += 1
             raise RuntimeError("libimagequant unavailable")
@@ -478,7 +487,7 @@ def test_quantize_for_png_converts_non_rgb_and_falls_back(monkeypatch: pytest.Mo
 
 
 def test_binary_search_returns_none_when_no_quality_fits() -> None:
-    encode_fn = lambda q: b"x" * 1000  # noqa: E731
+    encode_fn: Callable[..., bytes] = lambda q: b"x" * 1000  # noqa: E731
     quality, data = _binary_search_quality(encode_fn=encode_fn, target_size=100, min_quality=10, max_quality=95)
     assert quality is None
     assert data is None
@@ -506,7 +515,7 @@ def test_psnr_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _psnr(original=im, compressed_bytes=buf.getvalue(), background=(255, 255, 255)) == 99.0
     # np.asarray falla -> None
 
-    def flaky_asarray(*args, **kwargs) -> NoReturn:
+    def flaky_asarray(*args: Any, **kwargs: Any) -> NoReturn:
         raise ValueError("shape raro")
 
     monkeypatch.setattr(target=cc.np, name="asarray", value=flaky_asarray)
@@ -522,7 +531,7 @@ def test_finalize_copies_original_when_not_smaller(tmp_path: Path) -> None:
     make_solid_image(path=src, size=(50, 50))
     dst: Path = tmp_path / "out.jpg"
     im: Image.Image = Image.new(mode="RGB", size=(50, 50), color="red")
-    meta = _finalize(
+    meta: cc.CompressMeta = _finalize(
         output_path=dst,
         input_path=src,
         original_size=100,
@@ -566,10 +575,10 @@ def test_exif_bytes_error_path(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_save_with_optional_metadata_retries_on_type_error(monkeypatch: pytest.MonkeyPatch) -> None:
     im: Image.Image = Image.new(mode="RGB", size=(32, 32), color="red")
     buf = io.BytesIO()
-    original_save = im.save
+    original_save: Callable[..., None] = im.save
     calls: dict[str, int] = {"n": 0}
 
-    def flaky_save(*args, **kwargs) -> None:
+    def flaky_save(*args: Any, **kwargs: Any) -> None:
         if calls["n"] == 0:
             calls["n"] += 1
             raise TypeError("opción no soportada")
@@ -590,11 +599,143 @@ def test_compress_swallows_close_error(tmp_path: Path, monkeypatch: pytest.Monke
     src: Path = tmp_path / "a.jpg"
     make_solid_image(path=src)
 
-    def boom_close(self) -> None:
+    def boom_close(self: Image.Image) -> None:
         raise RuntimeError("close falló")
 
     monkeypatch.setattr(target=Image.Image, name="close", value=boom_close)
     dst: Path = tmp_path / "out.jpg"
-    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5)
+    meta: cc.CompressMeta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5)
     assert dst.exists()
     assert "new_size" in meta
+
+
+# Tests convert_format
+
+
+def test_convert_jpeg_to_png_lossless(tmp_path: Path) -> None:
+    src: Path = tmp_path / "a.jpg"
+    make_solid_image(path=src)
+    dst: Path = tmp_path / "a.png"
+    meta: cc.ConvertMeta = convert_format(input_path=src, output_path=dst, target_format="PNG")
+    assert dst.exists()
+    assert meta["format"] == "PNG"
+    assert meta["quality"] is None
+    assert meta["original_size"] > 0
+    assert meta["new_size"] > 0
+    with Image.open(fp=dst) as out:
+        out.load()
+        assert out.size == (100, 100)
+
+
+def test_convert_png_rgba_to_jpeg_flattens(tmp_path: Path) -> None:
+    src: Path = tmp_path / "a.png"
+    Image.new(mode="RGBA", size=(64, 64), color=(10, 20, 30, 100)).save(fp=src, format="PNG")
+    dst: Path = tmp_path / "a.jpg"
+    meta: cc.ConvertMeta = convert_format(input_path=src, output_path=dst, target_format="JPEG", quality=80)
+    assert dst.exists()
+    assert meta["quality"] is not None
+    assert 10 <= meta["quality"] <= 80
+    with Image.open(fp=dst) as out:
+        out.load()
+        assert out.mode == "RGB"
+        assert out.size == (64, 64)
+
+
+def test_convert_jpeg_to_webp(tmp_path: Path) -> None:
+    src: Path = tmp_path / "a.jpg"
+    make_noisy_image(path=src, size=(200, 200))
+    dst: Path = tmp_path / "a.webp"
+    meta: cc.ConvertMeta = convert_format(input_path=src, output_path=dst, target_format="webp", quality=80)
+    assert dst.exists()
+    assert meta["format"] == "WEBP"
+    with Image.open(fp=dst) as out:
+        out.load()
+        assert out.size == (200, 200)
+
+
+def test_convert_invalid_format_raises(tmp_path: Path) -> None:
+    src: Path = tmp_path / "a.jpg"
+    make_solid_image(path=src)
+    with pytest.raises(expected_exception=ValueError, match="target_format"):
+        convert_format(input_path=src, output_path=tmp_path / "a.gif", target_format="GIF")
+
+
+def test_convert_invalid_quality_raises(tmp_path: Path) -> None:
+    src: Path = tmp_path / "a.jpg"
+    make_solid_image(path=src)
+    with pytest.raises(expected_exception=ValueError, match="quality"):
+        convert_format(input_path=src, output_path=tmp_path / "a.png", target_format="PNG", quality=0)
+    with pytest.raises(expected_exception=ValueError, match="quality"):
+        convert_format(input_path=src, output_path=tmp_path / "a.png", target_format="PNG", quality=101)
+
+
+def test_convert_missing_input_raises(tmp_path: Path) -> None:
+    with pytest.raises(expected_exception=FileNotFoundError):
+        convert_format(input_path=tmp_path / "missing.jpg", output_path=tmp_path / "o.png",
+                       target_format="PNG")
+
+
+def test_convert_same_path_raises(tmp_path: Path) -> None:
+    src: Path = tmp_path / "a.jpg"
+    make_solid_image(path=src)
+    with pytest.raises(expected_exception=ValueError, match="distintos"):
+        convert_format(input_path=src, output_path=src, target_format="PNG")
+
+
+def test_convert_avif_without_support_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    src: Path = tmp_path / "a.jpg"
+    make_solid_image(path=src)
+    monkeypatch.setattr(target=cc, name="check_avif_support", value=lambda: False)
+    with pytest.raises(expected_exception=UnsupportedFormatError, match="AVIF"):
+        convert_format(input_path=src, output_path=tmp_path / "a.avif", target_format="AVIF")
+
+
+def test_target_formats_contains_expected() -> None:
+    assert set(TARGET_FORMATS) == {"AVIF", "WEBP", "JPEG", "PNG"}
+
+
+def test_convert_compresses_to_target_ratio(tmp_path: Path) -> None:
+    src: Path = tmp_path / "a.jpg"
+    make_noisy_image(path=src, size=(400, 400))
+    original: int = src.stat().st_size
+    dst: Path = tmp_path / "a.webp"
+    meta: cc.ConvertMeta = convert_format(input_path=src, output_path=dst, target_format="WEBP",
+                          quality=85, target_ratio=0.5)
+    assert dst.exists()
+    assert meta["target_reached"] is True
+    assert meta["new_size"] <= original * 0.5 + 500
+    assert meta["quality"] is not None
+    assert 10 <= meta["quality"] <= 85
+
+
+def test_convert_defaults_to_never_heavier(tmp_path: Path) -> None:
+    src: Path = tmp_path / "a.png"
+    make_solid_image(path=src, size=(200, 200), fmt="PNG")
+    original: int = src.stat().st_size
+    dst: Path = tmp_path / "a.webp"
+    meta: cc.ConvertMeta = convert_format(input_path=src, output_path=dst, target_format="WEBP")
+    assert dst.exists()
+    assert meta["target_reached"] is True
+    assert meta["new_size"] <= original
+
+
+def test_convert_png_target_uses_palette_when_needed(tmp_path: Path) -> None:
+    src: Path = tmp_path / "a.jpg"
+    make_noisy_image(path=src, size=(300, 300))
+    dst: Path = tmp_path / "a.png"
+    convert_format(input_path=src, output_path=dst, target_format="PNG", target_ratio=0.3)
+    assert dst.exists()
+    with Image.open(fp=dst) as out:
+        out.load()
+        assert out.size == (300, 300)
+
+
+def test_convert_invalid_ratio_raises(tmp_path: Path) -> None:
+    src: Path = tmp_path / "a.jpg"
+    make_solid_image(path=src)
+    with pytest.raises(expected_exception=ValueError, match="target_ratio"):
+        convert_format(input_path=src, output_path=tmp_path / "a.webp",
+                       target_format="WEBP", target_ratio=0)
+    with pytest.raises(expected_exception=ValueError, match="target_ratio"):
+        convert_format(input_path=src, output_path=tmp_path / "a.webp",
+                       target_format="WEBP", target_ratio=1.5)

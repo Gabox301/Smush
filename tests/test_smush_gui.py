@@ -5,16 +5,26 @@ from __future__ import annotations
 
 import asyncio
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 import flet as ft
 import pytest
 from PIL import Image
 
 import smush_gui.app as app_module
-from compressor_core import UnsupportedFormatError
+from compressor_core import (
+    CompressRow,
+    ConvertRow,
+    ErrorMeta,
+    UnsupportedFormatError,
+    is_compress_error,
+    is_compress_ok,
+    is_convert_error,
+    is_convert_ok,
+)
 
 
 class FakePage:
@@ -69,6 +79,10 @@ def test_init_builds_views_and_sets_page(ctx: tuple[app_module.SmushApp, FakePag
     assert app.pending == []
     assert app.results == []
     assert app.compressing is False
+    assert app.pending_convert == []
+    assert app.convert_results == []
+    assert app.converting is False
+    assert app.convert_target == "WEBP"
     assert isinstance(app.tool_view, ft.Container)
     assert isinstance(app.landing_view, ft.ListView)
     assert app.tool_view.visible is False
@@ -85,9 +99,36 @@ def test_init_builds_views_and_sets_page(ctx: tuple[app_module.SmushApp, FakePag
     assert app.list_panel.visible is False
     assert app.results_panel.visible is False
     assert app.zip_btn.visible is False
+    assert app.convert_list_panel.visible is False
+    assert app.convert_results_panel.visible is False
+    assert app.convert_card.visible is False
+    assert app.convert_slider.value == 85
+    assert app.convert_size_slider.value == 100
+    assert set(app.convert_chips) == {"AVIF", "WEBP", "JPEG", "PNG"}
     # se lanzan las tareas internas (loop de animación, etc.)
     names = {handler.__name__ for handler, _, _ in fake.run_tasks}
     assert "_squish_loop" in names
+
+
+def test_tool_layout_flows_side_by_side(ctx: tuple[app_module.SmushApp, FakePage]) -> None:
+    """Compresión a la izquierda y conversión a la derecha, no apiladas."""
+    app, _fake = ctx
+    _topbar, flows_row, _footer = app.main_column.controls
+    assert isinstance(flows_row, ft.Container)
+    responsive: ft.Control | None = flows_row.content
+    assert isinstance(responsive, ft.ResponsiveRow)
+    left, right = (cast(ft.Container, c) for c in responsive.controls)
+    assert left.col == {"sm": 12, "lg": 6}
+    assert right.col == {"sm": 12, "lg": 6}
+    assert isinstance(left.content, ft.Column)
+    assert isinstance(right.content, ft.Column)
+    left_controls: list[ft.Control] = left.content.controls
+    right_controls: list[ft.Control] = right.content.controls
+    assert app.config_panel in left_controls
+    assert app.list_panel in left_controls
+    assert app.results_panel in left_controls
+    assert app.convert_list_panel in right_controls
+    assert app.convert_results_panel in right_controls
 
 
 def test_package_exports() -> None:
@@ -101,7 +142,7 @@ def test_package_exports() -> None:
 def test_tool_module_exports() -> None:
     from smush_gui.tool import __all__
 
-    assert set(__all__) == {"build_tool", "error_row", "pending_row", "result_row"}
+    assert set(__all__) == {"build_tool", "convert_result_row", "error_row", "pending_row", "result_row"}
 
 
 # ---------------- Navegación ----------------
@@ -171,7 +212,7 @@ def test_remove_file_in_bounds(ctx: tuple[app_module.SmushApp, FakePage], tmp_pa
 def test_clear_all_resets_state(ctx: tuple[app_module.SmushApp, FakePage]) -> None:
     app, _fake = ctx
     app.pending = [Path("x.jpg")]
-    app.results = [{"filename": "x"}]
+    app.results = [{"filename": "x", "error": "boom"}]
     app.zip_btn.visible = True
     app.results_panel.visible = True
     app.clear_all()
@@ -233,10 +274,191 @@ def test_pick_files_empty_selection_keeps_pending(ctx: tuple[app_module.SmushApp
     assert app.pending == [Path("x.jpg")]
 
 
+# ---------------- Conversión ----------------
+
+
+def test_pick_convert_files_adds_valid(ctx: tuple[app_module.SmushApp, FakePage], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _fake = ctx
+    valid: Path = tmp_path / "a.png"
+    Image.new("RGB", (40, 40), color="blue").save(fp=valid, format="PNG")
+
+    class FakePicker:
+        async def pick_files(self, **kw: Any) -> list:
+            return [
+                SimpleNamespace(path=str(object=valid), name="a.png"),
+                SimpleNamespace(path=str(object=tmp_path / "b.txt"), name="b.txt"),
+            ]
+
+    monkeypatch.setattr(target=app_module.ft, name="FilePicker", value=lambda: FakePicker())
+    asyncio.run(main=app.pick_convert_files(_e=None))
+    assert app.pending_convert == [valid]
+    assert app.convert_list_panel.visible is True
+    assert app.convert_card.visible is True
+    assert app.convert_file_col.controls
+
+
+def test_set_convert_target_repaints_chips(ctx: tuple[app_module.SmushApp, FakePage]) -> None:
+    from smush_gui.theme import LIME, SURFACE
+
+    app, _fake = ctx
+    assert app.convert_target == "WEBP"
+    app.set_convert_target("PNG")
+    assert app.convert_target == "PNG"
+    assert app.convert_chips["PNG"].bgcolor == LIME
+    assert app.convert_chips["WEBP"].bgcolor == SURFACE
+
+
+def test_on_convert_quality_change(ctx: tuple[app_module.SmushApp, FakePage]) -> None:
+    app, _fake = ctx
+    app.on_convert_quality_change(SimpleNamespace(control=SimpleNamespace(value=70)))
+    assert app.convert_quality_readout.value == "70"
+
+
+def test_on_convert_size_change(ctx: tuple[app_module.SmushApp, FakePage]) -> None:
+    app, _fake = ctx
+    app.on_convert_size_change(SimpleNamespace(control=SimpleNamespace(value=60)))
+    assert app.convert_size_readout.value == "60"
+
+
+def test_remove_and_clear_convert(ctx: tuple[app_module.SmushApp, FakePage], tmp_path: Path) -> None:
+    app, _fake = ctx
+    pa: Path = tmp_path / "a.jpg"
+    pb: Path = tmp_path / "b.jpg"
+    _make_jpg(path=pa)
+    _make_jpg(path=pb)
+    app.pending_convert = [pa, pb]
+    app.remove_convert_file(0)
+    assert app.pending_convert == [pb]
+    app.clear_convert()
+    assert app.pending_convert == []
+    assert app.convert_results == []
+    assert app.convert_list_panel.visible is False
+    assert app.convert_card.visible is False
+    assert app.convert_results_panel.visible is False
+
+
+def test_convert_sync_success(ctx: tuple[app_module.SmushApp, FakePage], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _fake = ctx
+    _prepare_compress(app, tmp_path, monkeypatch)
+    p1: Path = tmp_path / "a.jpg"
+    p2: Path = tmp_path / "b.png"
+    _make_jpg(path=p1)
+    Image.new("RGB", (40, 40), color="green").save(fp=p2, format="PNG")
+    app.pending_convert = [p1, p2]
+    app.convert_target = "WEBP"
+    results: list[ConvertRow | ErrorMeta] = app._convert_sync(target_format="WEBP", quality=80)
+    assert len(results) == 2
+    for r in results:
+        assert is_convert_ok(r)
+        assert r["filename"].endswith(".webp")
+        assert Path(r["tmp_path"]).exists()
+        assert r["target_format"] == "WEBP"
+
+
+def test_convert_sync_renames_collisions(ctx: tuple[app_module.SmushApp, FakePage], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _fake = ctx
+    _prepare_compress(app, tmp_path, monkeypatch)
+    d1: Path = tmp_path / "d1"
+    d2: Path = tmp_path / "d2"
+    d1.mkdir()
+    d2.mkdir()
+    _make_jpg(path=d1 / "photo.jpg", color="red")
+    _make_jpg(path=d2 / "photo.png", color="blue")
+    app.pending_convert = [d1 / "photo.jpg", d2 / "photo.png"]
+    results: list[ConvertRow | ErrorMeta] = app._convert_sync(target_format="JPEG", quality=80)
+    assert {r["filename"] for r in results} == {"photo.jpg", "photo_1.jpg"}
+
+
+def test_convert_sync_reports_errors(ctx: tuple[app_module.SmushApp, FakePage], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _fake = ctx
+    _prepare_compress(app, tmp_path, monkeypatch)
+    ok: Path = tmp_path / "ok.jpg"
+    bad: Path = tmp_path / "bad.jpg"
+    _make_jpg(path=ok)
+    _make_jpg(path=bad)
+
+    def fake_convert(input_path: Path, output_path: Path, target_format: str, quality: int, target_ratio: float = 1.0) -> dict:
+        if input_path.name == "bad.jpg":
+            raise UnsupportedFormatError("AVIF no soportado")
+        output_path.write_bytes(data=b"data")
+        return {"format": target_format, "target_format": target_format, "original_size": 100,
+                "new_size": 50, "target_reached": True, "quality": quality, "note": None,
+                "width": 40, "height": 40, "preserve_exif": False, "icc_preserved": False}
+
+    monkeypatch.setattr(target=app_module, name="convert_format", value=fake_convert)
+    app.pending_convert = [ok, bad]
+    results: list[ConvertRow | ErrorMeta] = app._convert_sync(target_format="AVIF", quality=80)
+    by_name: dict[str, ConvertRow | ErrorMeta] = {r["filename"]: r for r in results}
+    assert "error" not in by_name["ok.avif"]
+    bad_row: ConvertRow | ErrorMeta = by_name["bad.avif"]
+    assert is_convert_error(bad_row)
+    assert bad_row["error"] == "AVIF no soportado"
+
+
+def test_render_convert_results(ctx: tuple[app_module.SmushApp, FakePage]) -> None:
+    app, _fake = ctx
+    app.convert_results = [
+        ErrorMeta(filename="a.webp", error="falló"),
+        ConvertRow(
+            filename="b.webp",
+            target_format="WEBP",
+            format="WEBP",
+            original_size=100,
+            new_size=50,
+            target_reached=True,
+            quality=80,
+            note=None,
+            tmp_path="x",
+            width=100,
+            height=100,
+            preserve_exif=False,
+            icc_preserved=False,
+        ),
+    ]
+    app.render_convert_results()
+    assert len(app.convert_result_col.controls) == 2
+    assert app.convert_results_panel.visible is True
+
+
+def test_convert_click_without_pending_returns_early(ctx: tuple[app_module.SmushApp, FakePage]) -> None:
+    app, _fake = ctx
+    app.pending_convert = []
+    asyncio.run(main=app.convert_click(_e=None))
+    assert app.converting is False
+
+
+def test_convert_click_runs_and_restores_button(ctx: tuple[app_module.SmushApp, FakePage], monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _fake = ctx
+    app.pending_convert = [Path("x.jpg")]
+    app.convert_slider.value = 85
+    app.convert_size_slider.value = 100
+    results = [
+        {
+            "filename": "x.webp",
+            "target_format": "WEBP",
+            "original_size": 100,
+            "new_size": 50,
+            "target_reached": True,
+            "quality": 80,
+            "note": None,
+            "tmp_path": "y",
+        }
+    ]
+    monkeypatch.setattr(target=app, name="_convert_sync", value=lambda *a: results)
+    asyncio.run(main=app.convert_click(_e=None))
+    assert app.convert_results == results
+    assert app.converting is False
+    assert app.convert_btn.disabled is False
+    assert app.convert_btn.opacity == 1.0
+    assert isinstance(app.convert_btn.content, ft.Text)
+    assert app.convert_btn.content.value == "Convertir"
+    assert app.convert_results_panel.visible is True
+
+
 # ---------------- Compresión ----------------
 
 
-def _prepare_compress(app, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _prepare_compress(app: app_module.SmushApp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(target=app_module, name="cleanup_old_jobs", value=lambda: None)
     monkeypatch.setattr(target=app_module, name="BASE_TMP", value=tmp_path / "base")
 
@@ -249,9 +471,10 @@ def test_compress_sync_success(ctx: tuple[app_module.SmushApp, FakePage], tmp_pa
     _make_jpg(path=p1)
     _make_jpg(path=p2)
     app.pending = [p1, p2]
-    results = app._compress_sync(ratio=0.5)
+    results: list[CompressRow | ErrorMeta] = app._compress_sync(ratio=0.5)
     assert len(results) == 2
     for r in results:
+        assert is_compress_ok(r)
         assert r["filename"] in ("a.jpg", "b.jpg")
         assert r["original_size"] > 0
         assert r["new_size"] > 0
@@ -269,8 +492,8 @@ def test_compress_sync_renames_collisions(ctx: tuple[app_module.SmushApp, FakePa
     _make_jpg(path=d1 / "photo.jpg", color="red")
     _make_jpg(path=d2 / "photo.jpg", color="blue")
     app.pending = [d1 / "photo.jpg", d2 / "photo.jpg"]
-    results = app._compress_sync(ratio=0.5)
-    names = {r["filename"] for r in results}
+    results: list[CompressRow | ErrorMeta] = app._compress_sync(ratio=0.5)
+    names: set[str] = {r["filename"] for r in results}
     assert names == {"photo.jpg", "photo_1.jpg"}
 
 
@@ -284,7 +507,7 @@ def test_compress_sync_reports_errors(ctx: tuple[app_module.SmushApp, FakePage],
     _make_jpg(path=bad1)
     _make_jpg(path=bad2)
 
-    def fake_compress(input_path: Path, output_path: Path, target_ratio: float):
+    def fake_compress(input_path: Path, output_path: Path, target_ratio: float) -> dict:
         if input_path.name == "bad1.jpg":
             raise UnsupportedFormatError("formato no soportado")
         if input_path.name == "bad2.jpg":
@@ -294,32 +517,40 @@ def test_compress_sync_reports_errors(ctx: tuple[app_module.SmushApp, FakePage],
             "new_size": 50,
             "quality": 50,
             "note": None,
+            "psnr_db": 40.0,
+            "quality_acceptable": True,
         }
         output_path.write_bytes(data=b"data")
         return meta
 
     monkeypatch.setattr(target=app_module, name="compress_to_target", value=fake_compress)
     app.pending = [ok, bad1, bad2]
-    results = app._compress_sync(ratio=0.5)
-    by_name = {r["filename"]: r for r in results}
+    results: list[CompressRow | ErrorMeta] = app._compress_sync(ratio=0.5)
+    by_name: dict[str, CompressRow | ErrorMeta] = {r["filename"]: r for r in results}
     assert "error" not in by_name["ok.jpg"]
-    assert by_name["bad1.jpg"]["error"] == "formato no soportado"
-    assert by_name["bad2.jpg"]["error"].startswith("Error al procesar")
+    bad1_row: CompressRow | ErrorMeta = by_name["bad1.jpg"]
+    assert is_compress_error(bad1_row)
+    assert bad1_row["error"] == "formato no soportado"
+    bad2_row: CompressRow | ErrorMeta = by_name["bad2.jpg"]
+    assert is_compress_error(bad2_row)
+    assert bad2_row["error"].startswith("Error al procesar")
 
 
 def test_render_results_with_errors_and_ok(ctx: tuple[app_module.SmushApp, FakePage]) -> None:
     app, _fake = ctx
     app.results = [
-        {"filename": "a.jpg", "error": "falló"},
-        {
-            "filename": "b.jpg",
-            "original_size": 100,
-            "new_size": 50,
-            "percent_of_original": 50.0,
-            "quality": 50,
-            "note": None,
-            "tmp_path": "x",
-        },
+        ErrorMeta(filename="a.jpg", error="falló"),
+        CompressRow(
+            filename="b.jpg",
+            original_size=100,
+            new_size=50,
+            percent_of_original=50.0,
+            quality=50,
+            note=None,
+            tmp_path="x",
+            psnr_db=45.0,
+            quality_acceptable=True,
+        ),
     ]
     app.render_results()
     assert len(app.result_col.controls) == 2
@@ -391,9 +622,29 @@ def test_save_zip_writes_only_ok_results(ctx: tuple[app_module.SmushApp, FakePag
 
     monkeypatch.setattr(target=app_module.ft, name="FilePicker", value=lambda: FakePicker())
     app.results = [
-        {"filename": "a.jpg", "tmp_path": str(object=f1)},
-        {"filename": "b.jpg", "tmp_path": str(object=f2)},
-        {"filename": "bad.jpg", "error": "x"},
+        CompressRow(
+            filename="a.jpg",
+            tmp_path=str(object=f1),
+            original_size=3,
+            new_size=3,
+            percent_of_original=100.0,
+            quality=None,
+            note=None,
+            psnr_db=None,
+            quality_acceptable=True,
+        ),
+        CompressRow(
+            filename="b.jpg",
+            tmp_path=str(object=f2),
+            original_size=3,
+            new_size=3,
+            percent_of_original=100.0,
+            quality=None,
+            note=None,
+            psnr_db=None,
+            quality_acceptable=True,
+        ),
+        ErrorMeta(filename="bad.jpg", error="x"),
     ]
     asyncio.run(main=app.save_zip(_e=None))
     with zipfile.ZipFile(file=dest) as zf:
@@ -426,6 +677,8 @@ def test_compress_click_runs_and_restores_button(ctx: tuple[app_module.SmushApp,
             "quality": 50,
             "note": None,
             "tmp_path": "y",
+            "psnr_db": 45.0,
+            "quality_acceptable": True,
         }
     ]
     monkeypatch.setattr(target=app, name="_compress_sync", value=lambda ratio: results)

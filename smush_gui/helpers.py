@@ -9,10 +9,9 @@ import tempfile
 import time
 from pathlib import Path
 
-from PIL import Image, ImageDraw
-
 import flet as ft
 import flet.canvas as cv
+from PIL import Image, ImageDraw
 
 from .theme import CORAL, FONT_BODY, FONT_DISPLAY, FONT_MONO, INK
 

@@ -1,6 +1,7 @@
 """Tests de smush_gui/theme: tokens de diseño y componentes base."""
+from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 import flet as ft
 
@@ -52,6 +53,7 @@ def test_neo_panel() -> None:
     assert panel.border.top.color == t.INK
     assert panel.content is inner
     assert panel.shadow is not None
+    assert isinstance(panel.shadow, ft.BoxShadow)
     assert panel.shadow.offset == ft.Offset(6, 6)
 
 

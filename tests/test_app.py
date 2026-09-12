@@ -4,17 +4,17 @@ import time
 from pathlib import Path
 from typing import Any, Literal, NoReturn
 
+import pytest
 from fastapi.testclient import TestClient
 from httpx2 import Response
-import pytest
 from PIL import Image
 
-import app as app_module
-from app import JOBS, JOB_TTL_SECONDS
+import api as api_module
+from api import JOB_TTL_SECONDS, JOBS
 from compressor_core import UnsupportedFormatError
 
 
-def make_jpeg_bytes(size=(200, 200), color="red", quality=95):
+def make_jpeg_bytes(size: tuple[int, int] = (200, 200), color: str = "red", quality: int = 95) -> io.BytesIO:
     img: Image.Image = Image.new("RGB", size, color=color)
     buf = io.BytesIO()
     img.save(fp=buf, format="JPEG", quality=quality)
@@ -22,7 +22,7 @@ def make_jpeg_bytes(size=(200, 200), color="red", quality=95):
     return buf
 
 
-def make_noisy_jpeg_bytes(size=(800, 800), quality=95):
+def make_noisy_jpeg_bytes(size: tuple[int, int] = (800, 800), quality: int = 95) -> io.BytesIO:
     import random
 
     w, h = size
@@ -35,7 +35,7 @@ def make_noisy_jpeg_bytes(size=(800, 800), quality=95):
     return buf
 
 
-def make_png_bytes(size=(100, 100)):
+def make_png_bytes(size: tuple[int, int] = (100, 100)) -> io.BytesIO:
     img: Image.Image = Image.new("RGBA", size, color=(255, 0, 0, 128))
     buf = io.BytesIO()
     img.save(fp=buf, format="PNG")
@@ -260,7 +260,6 @@ def test_download_success(client: TestClient) -> None:
         files=[("images", ("dl.jpg", buf, "image/jpeg"))],
         data={"ratio": "0.5"},
     )
-    job_id = r.json()["job_id"]
     dl_url = r.json()["results"][0]["download_url"]
     r2: Response = client.get(url=dl_url)
     assert r2.status_code == 200
@@ -368,7 +367,7 @@ def test_empty_filename_generates_name(client: TestClient) -> None:
 
 
 def test_error_when_saving_input_fails(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    def raiser(self, data, **kwargs) -> int:
+    def raiser(self: Path, data: bytes, **kwargs: Any) -> int:
         raise OSError("disk full")
 
     monkeypatch.setattr(target=Path, name="write_bytes", value=raiser)
@@ -401,10 +400,10 @@ def test_unsupported_format_raised_inside_loop_advertised_as_error(
 ) -> None:
     """La rama `except UnsupportedFormatError` del loop agrega el error al resultado."""
 
-    def boom(input_path, output_path, target_ratio, **kwargs) -> NoReturn:
+    def boom(input_path: Path, output_path: Path, target_ratio: float, **kwargs: Any) -> NoReturn:
         raise UnsupportedFormatError("formato no soportado")
 
-    monkeypatch.setattr(target=app_module, name="compress_to_target", value=boom)
+    monkeypatch.setattr(target=api_module, name="compress_to_target", value=boom)
     buf = make_jpeg_bytes()
     r: Response = client.post(
         url="/api/compress",
@@ -445,7 +444,7 @@ def test_cleanup_old_jobs_removes_expired(tmp_path: Path) -> None:
     JOBS["expired"] = {"dir": expired_dir, "created": time.time() - JOB_TTL_SECONDS - 60, "files": {}}
     JOBS["fresh"] = {"dir": fresh_dir, "created": time.time(), "files": {}}
 
-    app_module._cleanup_old_jobs()
+    api_module._cleanup_old_jobs()
 
     assert "expired" not in JOBS
     assert not expired_dir.exists()

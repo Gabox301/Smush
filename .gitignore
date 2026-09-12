@@ -82,6 +82,8 @@ dmypy.json
 .spyderproject
 .spyproject
 .ropeproject
+.opencode
+skills-lock.json
 
 # --- OS ---
 .DS_Store

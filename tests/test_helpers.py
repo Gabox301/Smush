@@ -3,12 +3,12 @@ import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, Callable, cast
 
 import flet as ft
 import flet.canvas as cv
-from flet.canvas import Shape
 import pytest
+from flet.canvas import Shape
 from PIL import Image
 
 from smush_gui import helpers as h
@@ -147,9 +147,9 @@ def test_cleanup_old_jobs_ignores_stat_errors(tmp_path: Path, monkeypatch: pytes
     (base / "keep").mkdir()
     monkeypatch.setattr(target=h, name="BASE_TMP", value=base)
 
-    original_stat = Path.stat
+    original_stat: Callable[..., os.stat_result] = Path.stat
 
-    def flaky_stat(self, *args, **kwargs) -> os.stat_result:
+    def flaky_stat(self: Path, *args: Any, **kwargs: Any) -> os.stat_result:
         if self.name == "boom":
             raise OSError("acceso denegado")
         return original_stat(self, *args, **kwargs)

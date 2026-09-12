@@ -11,10 +11,10 @@ import flet as ft
 from ..helpers import ASSETS
 from ..theme import (
     CORAL,
+    FONT_DISPLAY,
     INK,
     INK_SOFT,
     SURFACE,
-    FONT_DISPLAY,
     is_hovered,
     mono_text,
 )

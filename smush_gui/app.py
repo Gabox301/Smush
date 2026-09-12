@@ -7,28 +7,55 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from typing import Any, Callable
 import uuid
 import zipfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import flet as ft
 import flet.canvas as cv
 
-from .helpers import ASSETS, BASE_TMP, cleanup_old_jobs, ensure_assets, ext_of, register_fonts, squeeze_shapes
-from .landing import build_landing
-from .theme import ACCEPTED, BG
-from .tool import build_tool, error_row, pending_row, result_row
+from compressor_core import (
+    TARGET_FORMAT_TO_EXTENSION,
+    CompressResult,
+    CompressRow,
+    ConvertResult,
+    ConvertRow,
+    UnsupportedFormatError,
+    compress_to_target,
+    convert_format,
+    is_compress_error,
+    is_compress_ok,
+    is_convert_error,
+    is_convert_ok,
+)
 
-from compressor_core import UnsupportedFormatError, compress_to_target
+from .helpers import (
+    ASSETS,
+    BASE_TMP,
+    cleanup_old_jobs,
+    ensure_assets,
+    ext_of,
+    register_fonts,
+    squeeze_shapes,
+)
+from .landing import build_landing
+from .theme import ACCEPTED, BG, BW, INK, LIME, SURFACE
+from .tool import build_tool, convert_result_row, error_row, pending_row, result_row
 
 
 class SmushApp:
     # Estado del controlador
     page: ft.Page
     pending: list[Path]
-    results: list[dict]
+    results: list[CompressResult]
     compressing: bool
+    pending_convert: list[Path]
+    convert_results: list[ConvertResult]
+    converting: bool
+    convert_target: str
 
     # Vistas (asignadas en _build)
     tool_view: ft.Control
@@ -47,6 +74,20 @@ class SmushApp:
     result_col: ft.Column
     main_column: ft.Column
 
+    # Atributos de conversión (asignados por build_tool)
+    convert_card: ft.Container
+    convert_list_panel: ft.Container
+    convert_results_panel: ft.Container
+    convert_btn: ft.Container
+    convert_slider: ft.Slider
+    convert_quality_readout: ft.Text
+    convert_size_slider: ft.Slider
+    convert_size_readout: ft.Text
+    convert_file_col: ft.Column
+    convert_result_col: ft.Column
+    convert_chips: dict[str, ft.Container]
+    convert_dropzone: ft.Container
+
     # Atributos de la landing (asignados por build_landing)
     landing_col: ft.ListView
     hero_shape: ft.Image
@@ -56,6 +97,10 @@ class SmushApp:
         self.pending = []
         self.results = []
         self.compressing = False
+        self.pending_convert = []
+        self.convert_results = []
+        self.converting = False
+        self.convert_target = "WEBP"
 
         ensure_assets()
         register_fonts(page)
@@ -87,7 +132,7 @@ class SmushApp:
         blob_blue: ft.Container = _blob(size=300, right=-120, bottom=260, colors=["#384f6dff", "#004f6dff"])
 
         # Vista de la herramienta (oculta al inicio) y landing (visible).
-        self.tool_view = build_tool(app=self)  # noqa: (asigna panels/atributos)
+        self.tool_view = build_tool(app=self)  # asigna panels/atributos
         self.tool_view.visible = False
         self.landing_view = build_landing(app=self)
         self.landing_view.visible = True
@@ -110,23 +155,29 @@ class SmushApp:
         self.config_panel.visible = False
         self.list_panel.visible = False
         self.results_panel.visible = False
+        self.convert_list_panel.visible = False
+        self.convert_results_panel.visible = False
+        self.convert_card.visible = False
+        self.refresh_convert_chips()
         # Altura acotada para ListView/Column dentro de Stack: sin esto el scroll se recorta.
+        # Best-effort: si la página aún no reporta tamaño, se deja el default.
         try:
             _h: int | float = self.page.height or self.page.window.height or 700
             if _h and _h > 100:
                 self.landing_col.height = _h
                 self.main_column.height = _h
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
         def _on_resize(e: ft.WindowResizeEvent) -> None:  # type: ignore
+            # Best-effort: un resize nunca debe romper la app.
             try:
                 h: Any | int | float | None = getattr(e, "height", None) or self.page.window.height or self.page.height
                 if h and h > 100:
                     self.landing_col.height = h
                     self.main_column.height = h
                     self.page.update()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         self.page.on_resized = _on_resize  # type: ignore[assignment]
@@ -134,12 +185,12 @@ class SmushApp:
         self.page.run_task(handler=self._squish_loop)
 
     # ---------------- Navegación ----------------
-    def go_tool(self, _e=None) -> None:
+    def go_tool(self, _e: ft.Event | None = None) -> None:
         self.landing_view.visible = False
         self.tool_view.visible = True
         self.page.update()
 
-    def go_landing(self, _e=None) -> None:
+    def go_landing(self, _e: ft.Event | None = None) -> None:
         self.tool_view.visible = False
         self.landing_view.visible = True
         self.page.run_task(handler=self._reset_landing_scroll)
@@ -177,10 +228,11 @@ class SmushApp:
                 continue
 
     # ---------------- Eventos de la herramienta ----------------
-    async def pick_files(self, _e) -> None:
+    async def _pick_images(self, dialog_title: str, pending: list[Path], refresh: Callable[[], None]) -> None:
+        """Selector de archivos genérico: filtra por extensión, evita duplicados."""
         picker = ft.FilePicker()
         files: list[ft.FilePickerFile] = await picker.pick_files(
-            dialog_title="Elegí imágenes para comprimir",
+            dialog_title=dialog_title,
             file_type=ft.FilePickerFileType.CUSTOM,
             allowed_extensions=[ext.lstrip(".") for ext in ACCEPTED],
             allow_multiple=True,
@@ -192,11 +244,31 @@ class SmushApp:
             if not f.path or ext_of(filename=f.name) not in ACCEPTED:
                 continue
             path = Path(f.path)
-            if path.exists() and path not in self.pending:
-                self.pending.append(path)
+            if path.exists() and path not in pending:
+                pending.append(path)
                 added += 1
         if added:
-            self.refresh_lists()
+            refresh()
+
+    async def pick_files(self, _e: ft.Event | None) -> None:
+        await self._pick_images("Elegí imágenes para comprimir", self.pending, self.refresh_lists)
+
+    @contextmanager
+    def _busy_button(self, btn: ft.Container, busy_label: str, idle_label: str) -> Iterator[None]:
+        """Deshabilita el botón con etiqueta de progreso y lo restaura al salir."""
+        content = btn.content
+        assert isinstance(content, ft.Text), "job button content must be Text"
+        btn.disabled = True
+        btn.opacity = 0.55
+        content.value = busy_label
+        self.page.update()
+        try:
+            yield
+        finally:
+            btn.disabled = False
+            btn.opacity = 1.0
+            content.value = idle_label
+            self.page.update()
 
     def on_slider_change(self, e) -> None:  # noqa: ANN001
         percent = int(e.control.value)
@@ -204,12 +276,12 @@ class SmushApp:
         self.squeeze_canvas.shapes = squeeze_shapes(percent)
         self.page.update()
 
-    def remove_file(self, index: int, _e=None) -> None:
+    def remove_file(self, index: int, _e: ft.Event | None = None) -> None:
         if 0 <= index < len(self.pending):
             self.pending.pop(index)
             self.refresh_lists()
 
-    def clear_all(self, _e=None) -> None:
+    def clear_all(self, _e: ft.Event | None = None) -> None:
         self.pending.clear()
         self.results.clear()
         self.result_col.controls.clear()
@@ -229,50 +301,133 @@ class SmushApp:
             self.results_panel.visible = False
         self.page.update()
 
+    # ---------------- Conversión de formato ----------------
+    async def pick_convert_files(self, _e: ft.Event | None) -> None:
+        await self._pick_images("Elegí imágenes para convertir", self.pending_convert, self.refresh_convert_lists)
+
+    def set_convert_target(self, fmt: str, _e: ft.Event | None = None) -> None:
+        self.convert_target = fmt
+        self.refresh_convert_chips()
+
+    def refresh_convert_chips(self) -> None:
+        for fmt, chip in self.convert_chips.items():
+            selected: bool = fmt == self.convert_target
+            chip.bgcolor = LIME if selected else SURFACE
+            chip.border = ft.Border.all(width=BW if selected else 2, color=INK)
+        try:
+            self.page.update()
+        except RuntimeError:
+            pass
+
+    def on_convert_quality_change(self, e) -> None:  # noqa: ANN001
+        self.convert_quality_readout.value = str(object=int(e.control.value))
+        self.page.update()
+
+    def on_convert_size_change(self, e) -> None:  # noqa: ANN001
+        self.convert_size_readout.value = str(object=int(e.control.value))
+        self.page.update()
+
+    def remove_convert_file(self, index: int, _e: ft.Event | None = None) -> None:
+        if 0 <= index < len(self.pending_convert):
+            self.pending_convert.pop(index)
+            self.refresh_convert_lists()
+
+    def clear_convert(self, _e: ft.Event | None = None) -> None:
+        self.pending_convert.clear()
+        self.convert_results.clear()
+        self.convert_result_col.controls.clear()
+        self.convert_results_panel.visible = False
+        self.refresh_convert_lists()
+
+    def refresh_convert_lists(self) -> None:
+        self.convert_file_col.controls.clear()
+        for i, path in enumerate(iterable=self.pending_convert):
+            self.convert_file_col.controls.append(
+                pending_row(i, path, remove_cb=self.remove_convert_file))
+        has_files = bool(self.pending_convert)
+        self.convert_list_panel.visible = has_files
+        self.convert_card.visible = has_files
+        if not has_files:
+            self.convert_results_panel.visible = False
+        self.page.update()
+
+    async def convert_click(self, _e: ft.Event | None) -> None:
+        if not self.pending_convert or self.converting:
+            return
+        self.converting = True
+        try:
+            with self._busy_button(self.convert_btn, "Convirtiendo…", "Convertir"):
+                _quality_val: int | float | None = self.convert_slider.value
+                quality: int = int(_quality_val if _quality_val is not None else 85)
+                _size_val: int | float | None = self.convert_size_slider.value
+                ratio: float = int(_size_val if _size_val is not None else 100) / 100
+                metas = await asyncio.to_thread(self._convert_sync, self.convert_target, quality, ratio)
+                self.convert_results = metas
+                self.render_convert_results()
+        finally:
+            self.converting = False
+
+    def _convert_sync(self, target_format: str, quality: int, ratio: float = 1.0) -> list[ConvertResult]:
+        """Convierte cada pendiente al formato destino en un hilo aparte."""
+        out_dir: Path = _job_out_dir()
+
+        new_ext: str = TARGET_FORMAT_TO_EXTENSION[target_format]
+        results: list[ConvertResult] = []
+        used_names: set[str] = set()
+        for path in self.pending_convert:
+            name: str = _next_available_name(out_dir, path.stem, new_ext, used_names)
+            out_path: Path = out_dir / name
+
+            try:
+                meta = convert_format(input_path=path, output_path=out_path,
+                                      target_format=target_format, quality=quality,
+                                      target_ratio=ratio)
+            except UnsupportedFormatError as err:
+                results.append({"filename": name, "error": str(object=err)})
+                continue
+            except Exception as err:  # noqa: BLE001
+                results.append({"filename": name, "error": f"Error al convertir: {err}"})
+                continue
+
+            results.append(ConvertRow(**meta, filename=name, tmp_path=str(object=out_path)))
+        return results
+
+    def render_convert_results(self) -> None:
+        self.convert_result_col.controls.clear()
+        for i, r in enumerate(iterable=self.convert_results):
+            if is_convert_ok(r):
+                ctl = convert_result_row(self, i, r)
+            else:
+                assert is_convert_error(r)
+                ctl = error_row(i, filename=r["filename"], error=r["error"])
+            self.convert_result_col.controls.append(ctl)
+        self.convert_results_panel.visible = True
+        self.page.update()
+
     # ---------------- Compresión ----------------
-    async def compress_click(self, _e) -> None:
+    async def compress_click(self, _e: ft.Event | None) -> None:
         if not self.pending or self.compressing:
             return
         self.compressing = True
-        self.compress_btn.disabled = True
-        self.compress_btn.opacity = 0.55
-        _btn_content: ft.Control | None = self.compress_btn.content
-        assert isinstance(_btn_content, ft.Text), "compress_btn content must be Text"
-        _btn_content.value = "Comprimiendo…"
-        self.page.update()
-
-        _slider_val: int | float | None = self.slider.value
-        ratio: float = int(_slider_val if _slider_val is not None else 50) / 100
         try:
-            metas = await asyncio.to_thread(self._compress_sync, ratio)
-            self.results = metas
-            self.render_results()
+            with self._busy_button(self.compress_btn, "Comprimiendo…", "Comprimir todo"):
+                _slider_val: int | float | None = self.slider.value
+                ratio: float = int(_slider_val if _slider_val is not None else 50) / 100
+                metas = await asyncio.to_thread(self._compress_sync, ratio)
+                self.results = metas
+                self.render_results()
         finally:
             self.compressing = False
-            self.compress_btn.disabled = False
-            self.compress_btn.opacity = 1.0
-            _btn_content = self.compress_btn.content
-            assert isinstance(_btn_content, ft.Text), "compress_btn content must be Text"
-            _btn_content.value = "Comprimir todo"
-            self.page.update()
 
-    def _compress_sync(self, ratio: float) -> list[dict]:
+    def _compress_sync(self, ratio: float) -> list[CompressResult]:
         """CPU-bound vía Pillow; corre en un hilo aparte (asyncio.to_thread)."""
-        cleanup_old_jobs()
-        job_dir: Path = BASE_TMP / uuid.uuid4().hex
-        out_dir: Path = job_dir / "out"
-        out_dir.mkdir(parents=True)
+        out_dir: Path = _job_out_dir()
 
-        results: list[dict] = []
+        results: list[CompressResult] = []
         used_names: set[str] = set()
         for path in self.pending:
             stem, ext = path.stem, path.suffix.lower()
-            name: str = f"{stem}{ext}"
-            counter = 1
-            while name in used_names or (out_dir / name).exists():
-                name = f"{stem}_{counter}{ext}"
-                counter += 1
-            used_names.add(name)
+            name: str = _next_available_name(out_dir, stem, ext, used_names)
             out_path: Path = out_dir / name
 
             try:
@@ -294,6 +449,8 @@ class SmushApp:
                     "quality": meta["quality"],
                     "note": meta["note"],
                     "tmp_path": str(object=out_path),
+                    "psnr_db": meta["psnr_db"],
+                    "quality_acceptable": meta["quality_acceptable"],
                 }
             )
         return results
@@ -302,18 +459,19 @@ class SmushApp:
         self.result_col.controls.clear()
         any_ok = False
         for i, r in enumerate(iterable=self.results):
-            if r.get("error"):
+            if is_compress_ok(r):
+                self.result_col.controls.append(result_row(self, i, r))
+                any_ok = True
+            else:
+                assert is_compress_error(r)
                 self.result_col.controls.append(error_row(i, filename=r["filename"], error=r["error"]))
-                continue
-            self.result_col.controls.append(result_row(self, i, r))
-            any_ok = True
         self.zip_btn.visible = any_ok
         self.results_panel.visible = True
         self.page.update()
 
     # ---------------- Guardado ----------------
     def make_save_handler(self, result: dict) -> Callable[..., None]:
-        def handler(_e) -> None:
+        def handler(_e: ft.Event | None) -> None:
             self.page.run_task(self.save_one, result)
 
         return handler
@@ -327,8 +485,8 @@ class SmushApp:
         shutil.copyfile(src=result["tmp_path"], dst=dest)
         self._snack(message=f"Guardada: {dest}")
 
-    async def save_zip(self, _e) -> None:
-        ok_results = [r for r in self.results if not r.get("error")]
+    async def save_zip(self, _e: ft.Event | None) -> None:
+        ok_results: list[CompressRow] = [r for r in self.results if is_compress_ok(r)]
         if not ok_results:
             return
         picker = ft.FilePicker()
@@ -348,6 +506,25 @@ class SmushApp:
 # ------------------------------------------------------------------
 # Helpers de módulo
 # ------------------------------------------------------------------
+def _job_out_dir() -> Path:
+    """Crea y devuelve el dir de salida de un job temporal (hilo aparte)."""
+    cleanup_old_jobs()
+    out_dir: Path = BASE_TMP / uuid.uuid4().hex / "out"
+    out_dir.mkdir(parents=True)
+    return out_dir
+
+
+def _next_available_name(out_dir: Path, stem: str, ext: str, used: set[str]) -> str:
+    """Nombre sin colisiones dentro del job (ni en memoria ni en disco)."""
+    name: str = f"{stem}{ext}"
+    counter = 1
+    while name in used or (out_dir / name).exists():
+        name = f"{stem}_{counter}{ext}"
+        counter += 1
+    used.add(name)
+    return name
+
+
 def _blob(size: int, colors: list[str], **pos) -> ft.Container:  # noqa: ANN003
     return ft.Container(
         width=size,

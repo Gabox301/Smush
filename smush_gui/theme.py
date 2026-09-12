@@ -3,6 +3,9 @@ Tokens de diseño "elastic neo-brutalism" y componentes base.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import flet as ft
 
 # ---- Colores ----
@@ -37,7 +40,7 @@ def is_hovered(data: object) -> bool:
 
 
 def mono_text(
-    value,
+    value: str,
     size: float = 12,
     color: str = INK_SOFT,
     weight: ft.FontWeight = ft.FontWeight.W_400,
@@ -62,7 +65,7 @@ def neo_button(
     label: str,
     bgcolor: str,
     color: str,
-    on_click=None,
+    on_click: Callable[..., Any] | None = None,
     border_color: str = INK,
     border_width: int = BW,
     shadow_offset: tuple[float, float] = (4, 4),

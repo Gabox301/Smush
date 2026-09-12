@@ -1,22 +1,23 @@
 import shutil
+from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Any, Callable, Generator
+from typing import Any
 
-from PIL.Image import Image
 import pytest
 from fastapi.testclient import TestClient
+from PIL.Image import Image
 
-from app import BASE_TMP, JOBS, app
+from api import BASE_TMP, JOBS, app
 
 
 @pytest.fixture
-def client() -> Generator[TestClient, Any, None]:
+def client() -> Generator[TestClient, Any]:
     with TestClient(app) as c:
         yield c
 
 
 @pytest.fixture(autouse=True)
-def clean_jobs() -> Generator[None, Any, None]:
+def clean_jobs() -> Generator[None, Any]:
     """Limpia JOBS dict y archivos temporales después de cada test."""
     yield
     for job_id, job in list(JOBS.items()):
@@ -32,11 +33,11 @@ def clean_jobs() -> Generator[None, Any, None]:
 @pytest.fixture
 def tmp_image(tmp_path: Path) -> Callable[..., Path]:
     """Factory para crear imágenes temporales."""
-    from PIL import Image
-    import io
     import random
 
-    def _make(filename="test.jpg", size=(100, 100), fmt="JPEG", color="red", noisy=False) -> Path:
+    from PIL import Image
+
+    def _make(filename: str = "test.jpg", size: tuple[int, int] = (100, 100), fmt: str = "JPEG", color: str = "red", noisy: bool = False) -> Path:
         path: Path = tmp_path / filename
         if noisy:
             img: Image = Image.new("RGB", size)

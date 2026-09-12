@@ -8,15 +8,14 @@ import flet as ft
 from ..theme import (
     BLUE,
     CORAL,
+    FONT_DISPLAY,
     INK,
     INK_SOFT,
     LIME,
     SURFACE,
     SURFACE_ALT,
-    FONT_DISPLAY,
     neo_panel,
 )
-
 from .primitives import with_hover
 
 
