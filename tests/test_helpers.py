@@ -1,9 +1,10 @@
 """Tests de smush_gui/helpers: texto, miniaturas, assets, fuentes y limpieza."""
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 import flet as ft
 import flet.canvas as cv

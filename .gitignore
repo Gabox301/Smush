@@ -13,6 +13,10 @@ __pycache__/
 *.pyd
 
 # --- Dist / build / packaging ---
+# *.spec: artefacto generado por `flet pack` (PyInstaller) con paths
+# absolutos de la máquina que lo generó; el comando del README es
+# la fuente de verdad, no el archivo.
+*.spec
 build/
 develop-eggs/
 dist/

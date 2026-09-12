@@ -1,7 +1,8 @@
 import io
 import random
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Literal, NoReturn
+from typing import Any, Literal, NoReturn
 
 import pytest
 from PIL import Image
