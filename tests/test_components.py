@@ -244,6 +244,50 @@ def test_result_row_badge_and_note() -> None:
     assert "calidad 50" in vals
 
 
+def test_result_row_shows_psnr_chip() -> None:
+    from smush_gui.theme import CORAL, INK_SOFT
+
+    app = SimpleNamespace(make_save_handler=lambda r: (lambda _e: None))
+    base = {
+        "filename": "f.jpg",
+        "percent_of_original": 50.0,
+        "original_size": 1000,
+        "new_size": 500,
+        "quality": 50,
+        "note": None,
+    }
+    # Sin psnr no hay chip
+    row: ft.Container = rows_mod.result_row(app, 0, dict(base))
+    assert "dB" not in " ".join(text_values(c=row))
+
+    # Con psnr bueno: chip visible, colores normales
+    ok = dict(base, psnr_db=45.12, quality_acceptable=True)
+    row_ok: ft.Container = rows_mod.result_row(app, 0, ok)
+    assert "45.1 dB" in text_values(c=row_ok)
+
+    # Con calidad baja: chip + nota en coral
+    bad = dict(base, psnr_db=24.33, quality_acceptable=False, note="aviso de piso")
+    row_bad: ft.Container = rows_mod.result_row(app, 0, bad)
+    assert "24.3 dB" in text_values(c=row_bad)
+
+    def all_texts(c: Any) -> list[ft.Text]:
+        found: list[ft.Text] = []
+        if isinstance(c, ft.Text):
+            found.append(c)
+        for sub in list(getattr(c, "controls", None) or []):
+            found += all_texts(sub)
+        content = getattr(c, "content", None)
+        if content is not None:
+            found += all_texts(content)
+        return found
+
+    bad_texts = {t.value: t.color for t in all_texts(row_bad)}
+    assert bad_texts.get("24.3 dB") == CORAL
+    ok_texts = {t.value: t.color for t in all_texts(row_ok)}
+    assert ok_texts.get("45.1 dB") != CORAL
+    assert INK_SOFT not in {t.color for t in all_texts(row_bad) if t.value and t.value.startswith("calidad")}
+
+
 def test_error_row_contains_message() -> None:
     row: ft.Container = rows_mod.error_row(i=0, filename="a.jpg", error="Formato no soportado")
     vals: list[str] = text_values(c=row)

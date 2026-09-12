@@ -13,7 +13,7 @@ from compressor_core import (
     UnsupportedFormatError,
     _best_effort_encode,
     _binary_search_quality,
-    _encode_png,
+    _encode_png_lossless,
     _encode_png_with_colors,
     _exif_bytes,
     _finalize,
@@ -98,10 +98,54 @@ def test_compress_jpeg_reduces_to_target(tmp_path: Path) -> None:
     assert meta["new_size"] <= original * target_ratio + 500  # tolerancia por búsqueda binaria
     assert 10 <= meta["quality"] <= 95
     assert meta["width"] == 800 and meta["height"] == 600 or meta["width"] == 800  # noisy 800x800
-    assert meta["note"] is None
+    # Piso de calidad: si el PSNR quedó bajo el mínimo, el note trae el aviso en vez de None.
+    if meta["quality_acceptable"]:
+        assert meta["note"] is None
+    else:
+        assert meta["note"] is not None and "PSNR" in meta["note"]
     # dimensiones preservadas
     with Image.open(fp=dst) as out:
         assert out.size == (800, 800)
+
+
+def test_compute_psnr_false_skips_psnr(tmp_path: Path) -> None:
+    src: Path = tmp_path / "src.jpg"
+    dst: Path = tmp_path / "dst.jpg"
+    make_noisy_image(path=src, size=(800, 800), fmt="JPEG")
+    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5, compute_psnr=False)
+    assert dst.exists()
+    assert meta["psnr_db"] is None
+    assert meta["quality_acceptable"] is True
+    assert meta["note"] is None or "PSNR" not in meta["note"]
+
+
+def test_min_psnr_db_zero_reports_value_without_warning(tmp_path: Path) -> None:
+    src: Path = tmp_path / "src.jpg"
+    dst: Path = tmp_path / "dst.jpg"
+    make_noisy_image(path=src, size=(800, 800), fmt="JPEG")
+    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5, min_psnr_db=0.0)
+    assert dst.exists()
+    assert meta["psnr_db"] is not None
+    assert meta["quality_acceptable"] is True
+    assert meta["note"] is None or "PSNR" not in meta["note"]
+
+
+def test_min_psnr_db_strict_triggers_warning(tmp_path: Path) -> None:
+    src: Path = tmp_path / "src.jpg"
+    dst: Path = tmp_path / "dst.jpg"
+    make_noisy_image(path=src, size=(800, 800), fmt="JPEG")
+    meta = compress_to_target(input_path=src, output_path=dst, target_ratio=0.5, min_psnr_db=99.0)
+    assert dst.exists()
+    assert meta["quality_acceptable"] is False
+    assert meta["note"] is not None and "99.0" in meta["note"]
+
+
+def test_min_psnr_db_negative_raises(tmp_path: Path) -> None:
+    src: Path = tmp_path / "src.jpg"
+    make_noisy_image(path=src, size=(100, 100), fmt="JPEG")
+    with pytest.raises(expected_exception=ValueError, match="min_psnr_db"):
+        compress_to_target(input_path=src, output_path=tmp_path / "o.jpg",
+                           target_ratio=0.5, min_psnr_db=-1.0)
 
 
 def test_compress_jpeg_maintains_dimensions(tmp_path: Path) -> None:
@@ -116,12 +160,12 @@ def test_compress_jpeg_maintains_dimensions(tmp_path: Path) -> None:
 
 
 def test_compress_jpeg_rgba_converts_to_rgb(tmp_path: Path) -> None:
-    # Código refactorizado: _save_with_quality fue reemplazado por _flatten_for_jpeg + _encode.
+    # Código refactorizado: _save_with_quality fue reemplazado por _flatten_to_rgb + _encode.
     # JPEG no soporta RGBA/P con transparencia; debe aplanarse a RGB.
-    from compressor_core import _encode, _flatten_for_jpeg
+    from compressor_core import _encode, _flatten_to_rgb
 
     im_rgba: Image.Image = Image.new(mode="RGBA", size=(20, 20), color=(10, 20, 30, 100))
-    flat: Image.Image = _flatten_for_jpeg(im=im_rgba)
+    flat: Image.Image = _flatten_to_rgb(im=im_rgba)
     assert flat.mode == "RGB"
     data: bytes = _encode(im=im_rgba, fmt="JPEG", quality=50)
     assert len(data) > 0
@@ -131,7 +175,7 @@ def test_compress_jpeg_rgba_converts_to_rgb(tmp_path: Path) -> None:
 
     # también con modo P
     im_p: Image.Image = Image.new(mode="P", size=(20, 20))
-    flat_p: Image.Image = _flatten_for_jpeg(im=im_p)
+    flat_p: Image.Image = _flatten_to_rgb(im=im_p)
     assert flat_p.mode == "RGB"
     data_p: bytes = _encode(im=im_p, fmt="JPEG", quality=50)
     assert len(data_p) > 0
@@ -347,7 +391,7 @@ def _image_with_metadata(mode: str = "RGB") -> Image.Image:
 
 def test_encode_png_keeps_icc_and_exif() -> None:
     im: Image.Image = _image_with_metadata()
-    data: bytes = _encode_png(im=im, quality=50, preserve_exif=True)
+    data: bytes = _encode_png_lossless(im=im, preserve_exif=True)
     assert len(data) > 0
     with Image.open(fp=io.BytesIO(initial_bytes=data)) as out:
         out.load()
@@ -450,27 +494,27 @@ def test_binary_search_returns_none_when_no_quality_fits() -> None:
 def test_psnr_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     im: Image.Image = Image.new(mode="RGB", size=(40, 40), color="red")
     # decode falla -> None
-    assert _psnr(original=im, compressed_bytes=b"nope", fmt="JPEG", jpeg_background=(255, 255, 255)) is None
+    assert _psnr(original=im, compressed_bytes=b"nope", background=(255, 255, 255)) is None
     # shape mismatch -> None
     small: Image.Image = Image.new(mode="RGB", size=(20, 20), color="red")
     small_buf = io.BytesIO()
     small.save(fp=small_buf, format="PNG")
-    assert _psnr(original=im, compressed_bytes=small_buf.getvalue(), fmt="PNG", jpeg_background=(255, 255, 255)) is None
+    assert _psnr(original=im, compressed_bytes=small_buf.getvalue(), background=(255, 255, 255)) is None
     # idénticas -> 99.0
     buf = io.BytesIO()
     im.save(fp=buf, format="PNG")
-    assert _psnr(original=im, compressed_bytes=buf.getvalue(), fmt="PNG", jpeg_background=(255, 255, 255)) == 99.0
+    assert _psnr(original=im, compressed_bytes=buf.getvalue(), background=(255, 255, 255)) == 99.0
     # np.asarray falla -> None
 
     def flaky_asarray(*args, **kwargs) -> NoReturn:
         raise ValueError("shape raro")
 
     monkeypatch.setattr(target=cc.np, name="asarray", value=flaky_asarray)
-    assert _psnr(original=im, compressed_bytes=buf.getvalue(), fmt="PNG", jpeg_background=(255, 255, 255)) is None
+    assert _psnr(original=im, compressed_bytes=buf.getvalue(), background=(255, 255, 255)) is None
     # sin numpy -> None
     monkeypatch.setattr(target=cc, name="_HAS_NUMPY", value=False)
     monkeypatch.setattr(target=cc, name="np", value=None)
-    assert _psnr(original=im, compressed_bytes=buf.getvalue(), fmt="PNG", jpeg_background=(255, 255, 255)) is None
+    assert _psnr(original=im, compressed_bytes=buf.getvalue(), background=(255, 255, 255)) is None
 
 
 def test_finalize_copies_original_when_not_smaller(tmp_path: Path) -> None:

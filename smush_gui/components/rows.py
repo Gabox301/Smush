@@ -89,14 +89,35 @@ def result_row(app, i: int, r: dict) -> ft.Container:  # noqa: ANN001
     note: ft.Text = mono_text(
         value=f"calidad {r['quality']} — {r['note']}" if r.get("note") else f"calidad {r['quality']}",
         size=11,
+        color=CORAL if not r.get("quality_acceptable", True) else INK_SOFT,
+        weight=ft.FontWeight.W_600 if not r.get("quality_acceptable", True) else ft.FontWeight.W_400,
     )
+    controls: list[ft.Control] = [
+        meta_column(name=r["filename"], sub=ft.Column(spacing=0, controls=[sizes, note])),
+        badge,
+    ]
+    psnr = r.get("psnr_db")
+    if psnr is not None:
+        low_quality: bool = not r.get("quality_acceptable", True)
+        controls.append(
+            ft.Container(
+                bgcolor=SURFACE,
+                border=ft.Border.all(width=2, color=CORAL if low_quality else INK),
+                border_radius=20,
+                padding=ft.Padding(left=10, top=4, right=10, bottom=4),
+                tooltip="PSNR estimado vs el original (más alto = más fiel)",
+                content=mono_text(
+                    value=f"{round(psnr, 1)} dB",
+                    size=12.5,
+                    color=CORAL if low_quality else INK,
+                    weight=ft.FontWeight.W_700,
+                ),
+            )
+        )
     save_btn: ft.Container = neo_button(label="Guardar", bgcolor=BLUE, color="#fdfcf6", border_width=2, shadow_offset=(2, 2))
     save_btn.on_click = app.make_save_handler(r)
-    return row_shell(
-        i,
-        controls=[meta_column(name=r["filename"], sub=ft.Column(spacing=0, controls=[sizes, note])),
-         badge, save_btn],
-    )
+    controls.append(save_btn)
+    return row_shell(i, controls=controls)
 
 
 def error_row(i: int, filename: str, error: str) -> ft.Container:
